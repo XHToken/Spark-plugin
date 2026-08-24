@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=77.0.3", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-spark3-plugin"
+version = "0.1.0"
+description = "Spark3 support for vLLM, maintained out of tree"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+# The implementation is vendored from an unreleased vLLM commit. Keep version
+# selection with the operator and record the exact tested commit in the package.
+dependencies = ["vllm"]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[project.entry-points."vllm.general_plugins"]
+spark3 = "vllm_spark3_plugin:register"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["vllm_spark3_plugin*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+extend-exclude = [
+  "src/vllm_spark3_plugin/spark3.py",
+  "src/vllm_spark3_plugin/spark3_tool_parser.py",
+  "src/vllm_spark3_plugin/spark3_config.py",
+]
+force-exclude = true
