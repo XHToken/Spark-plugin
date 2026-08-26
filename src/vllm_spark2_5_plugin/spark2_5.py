@@ -46,7 +46,7 @@ from vllm.model_executor.models.utils import (
 )
 
 
-class Spark3MLP(nn.Module):
+class Spark2_5MLP(nn.Module):
     def __init__(
         self,
         config,
@@ -81,7 +81,7 @@ class Spark3MLP(nn.Module):
         return output
     
 
-class Spark3Attention(nn.Module):
+class Spark2_5Attention(nn.Module):
     def __init__(
         self,
         config,
@@ -186,7 +186,7 @@ class Spark3Attention(nn.Module):
         return output
     
 
-class Spark3DecoderLayer(nn.Module):
+class Spark2_5DecoderLayer(nn.Module):
     def __init__(
         self,
         config,
@@ -200,14 +200,14 @@ class Spark3DecoderLayer(nn.Module):
         self.input_layernorm = RMSNorm(hidden_size=self.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(hidden_size=self.hidden_size, eps=config.rms_norm_eps)
 
-        self.mlp = Spark3MLP(
+        self.mlp = Spark2_5MLP(
             config=config,
             hidden_size=self.hidden_size,
             intermediate_size=config.intermediate_size,
             quant_config=quant_config,
             prefix=f"{prefix}.mlp",
         )
-        self.self_attn = Spark3Attention(
+        self.self_attn = Spark2_5Attention(
             config=config,
             hidden_size=self.hidden_size,
             num_heads=config.num_attention_heads,
@@ -247,7 +247,7 @@ class Spark3DecoderLayer(nn.Module):
         "inputs_embeds": 0,
     }
 )
-class Spark3Model(nn.Module):
+class Spark2_5Model(nn.Module):
     def __init__(
         self,
         *,
@@ -270,7 +270,7 @@ class Spark3Model(nn.Module):
 
         self.start_layer, self.end_layer, self.layers = make_layers(
             config.num_hidden_layers,
-            lambda prefix: Spark3DecoderLayer(
+            lambda prefix: Spark2_5DecoderLayer(
                 vllm_config=vllm_config,
                 config=config,
                 prefix=prefix,
@@ -320,7 +320,7 @@ class Spark3Model(nn.Module):
         return hidden_states
 
 
-class Spark3ForCausalLM(nn.Module, SupportsPP):
+class Spark2_5ForCausalLM(nn.Module, SupportsPP):
     packed_modules_mapping = {
         "q_k_v_proj": ["q_proj", "k_proj", "v_proj"],
         "gate_up_proj": ["gate_proj", "up_proj"],
@@ -341,7 +341,7 @@ class Spark3ForCausalLM(nn.Module, SupportsPP):
         self.config = config
         self.quant_config = quant_config
 
-        self.model = Spark3Model(
+        self.model = Spark2_5Model(
             vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model")
         )
 

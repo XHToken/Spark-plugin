@@ -1,24 +1,24 @@
-# vLLM Spark3 Plugin
+# vLLM Spark2_5 Plugin
 
 > This document targets Linux systems and Bash-compatible shells. The commands
 > use POSIX paths and assume a Linux vLLM environment at `.venv/`.
 
-This package restores Spark3 support to vLLM as an out-of-tree general plugin.
-It enables loading and serving Spark3 models without modifying the vLLM source
+This package restores Spark2_5 support to vLLM as an out-of-tree general plugin.
+It enables loading and serving Spark2_5 models without modifying the vLLM source
 tree. The plugin registers:
 
-- `Spark3ForCausalLM`, the Spark3 model implementation;
-- the `spark3` Transformers configuration (`model_type: "spark3"`); and
-- the Spark3 XML/KV tool-call parser, registered under the vLLM parser name
-  `spark`.
+- `Spark2_5ForCausalLM`, the Spark2_5 model implementation;
+- the `spark2_5` Transformers configuration (`model_type: "spark2_5"`); and
+- the Spark2_5 XML/KV tool-call parser, registered under the vLLM parser name
+  `spark25`.
 
 The implementation is vendored from vLLM commit
 `81efe7883f30582696b69f9b9ea93c4819a8c608` and uses vLLM's existing runtime
 layers. It does not contain custom CUDA kernels or require a separate build.
 
-## Spark3 model capabilities
+## Spark2_5 model capabilities
 
-Spark3 is a causal language model that supports hybrid sliding-window/full
+Spark2_5 is a causal language model that supports hybrid sliding-window/full
 attention, head-wise attention output gating, tensor parallelism, pipeline
 parallelism, configurable RoPE parameters, and checkpoint weight loading.
 
@@ -30,7 +30,7 @@ configuration for the supported attention types.
 
 ### Head-wise attention output gating
 
-Spark3 can apply a learned gate to each attention head before the heads are
+Spark2_5 can apply a learned gate to each attention head before the heads are
 merged and passed to the output projection:
 
 ```text
@@ -45,7 +45,7 @@ parallel world size. The implementation uses vLLM's
 
 ### Pipeline parallelism
 
-`Spark3ForCausalLM` implements `SupportsPP` and uses vLLM's pipeline-parallel
+`Spark2_5ForCausalLM` implements `SupportsPP` and uses vLLM's pipeline-parallel
 layer construction and `IntermediateTensors` to transfer hidden states and
 residuals between pipeline stages.
 
@@ -81,7 +81,7 @@ plugin through the `vllm.general_plugins` entry-point metadata.
 uv pip install -e ./Spark-plugin --no-deps
 ```
 
-If the directory has been renamed to `vllm-spark3-plugin`, use that directory
+If the directory has been renamed to `vllm-spark2_5-plugin`, use that directory
 name in the command instead. `--no-deps` prevents the plugin from replacing
 the vLLM installation already selected for the environment. The vLLM parser
 stack requires OpenAI Python SDK 2.25.0 or newer:
@@ -101,7 +101,7 @@ print([(e.name, e.value) for e in entry_points(group='vllm.general_plugins')])"
 The output should include an entry similar to:
 
 ```text
-('spark3', 'vllm_spark3_plugin:register')
+('spark2_5', 'vllm_spark2_5_plugin:register')
 ```
 
 Adding `src/` to `PYTHONPATH` alone is not sufficient for normal plugin
@@ -109,19 +109,19 @@ discovery because entry points come from installed package metadata.
 
 ## First successful use
 
-Start the OpenAI-compatible server with the parser name `spark`:
+Start the OpenAI-compatible server with the parser name `spark25`:
 
 ```bash
-vllm serve /path/to/spark3-model \
+vllm serve /path/to/spark2_5-model \
   --trust-remote-code \
   --enable-auto-tool-choice \
-  --tool-call-parser spark \
+  --tool-call-parser spark25 \
   --chat-template /path/to/chat_template.jinja \
-  --served-model-name Spark3
+  --served-model-name Spark2_5
 ```
 
-The parser name is `spark`, not `spark3`: `spark3` identifies the model
-configuration, while `spark` is the name registered in `ToolParserManager`.
+The parser name is `spark25`, not `spark2_5`: `spark2_5` identifies the model
+configuration, while `spark25` is the name registered in `ToolParserManager`.
 
 For a small local test deployment, consider `--enforce-eager` and lower values
 for `--max-model-len`, `--max-num-batched-tokens`, and
@@ -130,24 +130,24 @@ for `--max-model-len`, `--max-num-batched-tokens`, and
 When the server starts, look for the plugin's registration log:
 
 ```text
-vllm-spark3-plugin: registered Spark3ForCausalLM -> ...
+vllm-spark2_5-plugin: registered Spark2_5ForCausalLM -> ...
 ```
 
-If vLLM already provides `Spark3ForCausalLM`, the plugin logs a stand-down
+If vLLM already provides `Spark2_5ForCausalLM`, the plugin logs a stand-down
 message and leaves the in-tree implementation active. To explicitly use this
 vendored implementation, set:
 
 ```bash
-SPARK3_PLUGIN_OVERRIDE=1 vllm serve /path/to/spark3-model \
+SPARK2_5_PLUGIN_OVERRIDE=1 vllm serve /path/to/spark2_5-model \
   --trust-remote-code \
   --enable-auto-tool-choice \
-  --tool-call-parser spark \
+  --tool-call-parser spark25 \
   --chat-template /path/to/chat_template.jinja
 ```
 
 ## Tool-call format
 
-The parser recognizes Spark3 XML/KV tool calls of this form:
+The parser recognizes Spark2_5 XML/KV tool calls of this form:
 
 ```text
 <tool_call>get_weather
@@ -195,7 +195,7 @@ concurrency of 500. Decode latency had a mean TPOT of 11.58 ms and a P99 of
 ## Compatibility and maintenance
 
 The model implementation depends on vLLM's internal runtime-layer APIs. The
-`TESTED_VLLM` value in `src/vllm_spark3_plugin/__init__.py` records the vLLM
+`TESTED_VLLM` value in `src/vllm_spark2_5_plugin/__init__.py` records the vLLM
 revision from which the implementation was extracted. When upgrading vLLM,
 retest the plugin and re-vendor the model files if an internal API has moved.
 
@@ -212,27 +212,27 @@ the plugin in the test environment, run:
 ```
 
 The tests verify both the public registration entry point and a complete
-Spark3 XML tool-call parse.
+Spark2_5 XML tool-call parse.
 
 ## Plugin loading and allowlists
 
 General plugins are loaded automatically by vLLM unless `VLLM_PLUGINS` is set
-as an allowlist. If an allowlist is used, the entry-point name is `spark3`:
+as an allowlist. If an allowlist is used, the entry-point name is `spark2_5`:
 
 ```bash
-VLLM_PLUGINS=spark3 vllm serve /path/to/spark3-model \
-  --tool-call-parser spark \
+VLLM_PLUGINS=spark2_5 vllm serve /path/to/spark2_5-model \
+  --tool-call-parser spark25 \
   --chat-template /path/to/chat_template.jinja
 ```
 
-`VLLM_PLUGINS=spark` is not equivalent: `spark` is the tool-parser name, not
+`VLLM_PLUGINS=spark25` is not equivalent: `spark25` is the tool-parser name, not
 the general-plugin entry-point name.
 
 ## Troubleshooting
 
-### `invalid tool call parser: spark3`
+### `invalid tool call parser: spark2_5`
 
-Use `--tool-call-parser spark`. The plugin registers the parser under `spark`.
+Use `--tool-call-parser spark25`. The plugin registers the parser under `spark25`.
 
 ### `NamespaceTool` cannot be imported from `openai.types.responses`
 
@@ -253,29 +253,29 @@ uv pip install -e ./Spark-plugin --no-deps
 print([(e.name, e.value) for e in entry_points(group='vllm.general_plugins')])"
 ```
 
-If `VLLM_PLUGINS` is set, include `spark3` in the allowlist.
+If `VLLM_PLUGINS` is set, include `spark2_5` in the allowlist.
 
-### The plugin reports that Spark3 is already supported
+### The plugin reports that Spark2_5 is already supported
 
 This is expected when the installed vLLM contains the model. Set
-`SPARK3_PLUGIN_OVERRIDE=1` only when the vendored implementation must be used.
+`SPARK2_5_PLUGIN_OVERRIDE=1` only when the vendored implementation must be used.
 
 ### The plugin logs an import traceback
 
 The entry-point loader catches plugin import failures and continues starting
 vLLM. Check the complete server log for the original traceback, then compare
 the running vLLM version with the vendored reference commit recorded in
-`src/vllm_spark3_plugin/__init__.py`.
+`src/vllm_spark2_5_plugin/__init__.py`.
 
 ## Project layout
 
 ```text
 Spark-plugin/
-+-- src/vllm_spark3_plugin/
++-- src/vllm_spark2_5_plugin/
 |   +-- __init__.py             # register() and entry-point integration
-|   +-- spark3.py               # vendored Spark3 model
-|   +-- spark3_config.py        # Transformers configuration
-|   +-- spark3_tool_parser.py   # Spark3 XML/KV parser
+|   +-- spark2_5.py               # vendored Spark2_5 model
+|   +-- spark2_5_config.py        # Transformers configuration
+|   +-- spark2_5_tool_parser.py   # Spark2_5 XML/KV parser
 +-- tests/
 |   +-- test_smoke.py           # registration and parser smoke tests
 +-- pyproject.toml

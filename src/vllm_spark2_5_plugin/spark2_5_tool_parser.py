@@ -49,7 +49,7 @@ ARG_PAIR_PATTERN = re.compile(
 
 
 @dataclass(frozen=True)
-class _Spark3ToolCall:
+class _Spark2_5ToolCall:
     name: str
     arguments: dict[str, Any]
 
@@ -73,7 +73,7 @@ def _get_param_type(
 
 
 def _convert_value(value: str, param_type: str) -> Any:
-    """Convert Spark3 XML text into a Python value."""
+    """Convert Spark2_5 XML text into a Python value."""
     if value.lower() == "null":
         return None
 
@@ -102,7 +102,7 @@ def _convert_value(value: str, param_type: str) -> Any:
 def _parse_tool_call_xml(
     tool_xml: str,
     tools: list[Tool] | None,
-) -> _Spark3ToolCall | None:
+) -> _Spark2_5ToolCall | None:
     if not tool_xml.startswith(TOOL_CALL_BEGIN) or not tool_xml.endswith(
         TOOL_CALL_END
     ):
@@ -125,7 +125,7 @@ def _parse_tool_call_xml(
             raw_value,
             _get_param_type(tools, function_name, key),
         )
-    return _Spark3ToolCall(name=function_name, arguments=arguments)
+    return _Spark2_5ToolCall(name=function_name, arguments=arguments)
 
 
 def _has_unknown_tool_name(tool_xml: str, tools: list[Tool] | None) -> bool:
@@ -141,8 +141,8 @@ def _has_unknown_tool_name(tool_xml: str, tools: list[Tool] | None) -> bool:
     return bool(function_name) and not find_tool_name(tools, function_name)
 
 
-class Spark3ToolParser(ToolParser):
-    """Tool parser for Spark3's XML-KV function-call format."""
+class Spark2_5ToolParser(ToolParser):
+    """Tool parser for Spark2_5's XML-KV function-call format."""
 
     supports_required_and_named = False
     engine_based_streaming = True
@@ -172,7 +172,7 @@ class Spark3ToolParser(ToolParser):
 
     def _append_tool_call(
         self,
-        parsed: _Spark3ToolCall,
+        parsed: _Spark2_5ToolCall,
         tool_index: int,
         calls: list[DeltaToolCall] | list[ToolCall],
         *,

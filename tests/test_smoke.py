@@ -7,21 +7,21 @@ from vllm.entrypoints.openai.chat_completion.protocol import (
 from vllm.model_executor.models.registry import ModelRegistry
 from vllm.tool_parsers.abstract_tool_parser import ToolParserManager
 
-from vllm_spark3_plugin import ARCHITECTURE, register
-from vllm_spark3_plugin.spark3_tool_parser import Spark3ToolParser
+from vllm_spark2_5_plugin import ARCHITECTURE, register
+from vllm_spark2_5_plugin.spark2_5_tool_parser import Spark2_5ToolParser
 
 
 def test_plugin_registers_model_and_tool_parser(monkeypatch):
-    """The public plugin entry point registers Spark3's model and parser."""
-    monkeypatch.setenv("SPARK3_PLUGIN_OVERRIDE", "1")
+    """The public plugin entry point registers Spark2_5's model and parser."""
+    monkeypatch.setenv("SPARK2_5_PLUGIN_OVERRIDE", "1")
 
     register()
 
     assert ARCHITECTURE in ModelRegistry.get_supported_archs()
-    assert ToolParserManager.get_tool_parser("spark") is Spark3ToolParser
+    assert ToolParserManager.get_tool_parser("spark25") is Spark2_5ToolParser
 
 
-def test_tool_parser_extracts_spark3_call():
+def test_tool_parser_extracts_spark2_5_call():
     """The parser smoke test covers the wire format and typed arguments."""
     tool = ChatCompletionToolsParam(
         function={
@@ -35,7 +35,7 @@ def test_tool_parser_extracts_spark3_call():
             },
         }
     )
-    parser = Spark3ToolParser(tokenizer=object(), tools=[tool])
+    parser = Spark2_5ToolParser(tokenizer=object(), tools=[tool])
 
     result = parser.extract_tool_calls(
         "Before "

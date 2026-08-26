@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Transformers configuration for Spark3 checkpoints.
+"""Transformers configuration for Spark2_5 checkpoints.
 
 VENDORED FROM vLLM commit 81efe7883f30582696b69f9b9ea93c4819a8c608.
 """
@@ -9,8 +9,8 @@ from typing import Any
 
 from transformers.configuration_utils import PretrainedConfig
 
-class Spark3Config(PretrainedConfig):
-    model_type = "spark3"
+class Spark2_5Config(PretrainedConfig):
+    model_type = "spark2_5"
 
     def __init__(
         self,

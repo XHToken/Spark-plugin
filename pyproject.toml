@@ -3,9 +3,9 @@ requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vllm-spark3-plugin"
+name = "vllm-spark2_5-plugin"
 version = "0.1.0"
-description = "Spark3 support for vLLM, maintained out of tree"
+description = "Spark2_5 support for vLLM, maintained out of tree"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -17,11 +17,11 @@ dependencies = ["vllm"]
 test = ["pytest>=8.0"]
 
 [project.entry-points."vllm.general_plugins"]
-spark3 = "vllm_spark3_plugin:register"
+spark2_5 = "vllm_spark2_5_plugin:register"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["vllm_spark3_plugin*"]
+include = ["vllm_spark2_5_plugin*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -29,8 +29,8 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 88
 extend-exclude = [
-  "src/vllm_spark3_plugin/spark3.py",
-  "src/vllm_spark3_plugin/spark3_tool_parser.py",
-  "src/vllm_spark3_plugin/spark3_config.py",
+  "src/vllm_spark2_5_plugin/spark2_5.py",
+  "src/vllm_spark2_5_plugin/spark2_5_tool_parser.py",
+  "src/vllm_spark2_5_plugin/spark2_5_config.py",
 ]
 force-exclude = true
