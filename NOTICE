@@ -1,0 +1,22 @@
+vLLM Spark2_5 Plugin
+Copyright 2026 XHToken Authors
+
+This product includes software vendored from the vLLM project
+(https://github.com/vllm-project/vllm), licensed under the Apache License 2.0.
+The vendored files were taken from vLLM commit
+81efe7883f30582696b69f9b9ea93c4819a8c608 and retain their original
+SPDX copyright headers ("Copyright contributors to the vLLM project").
+
+This product depends on the following third-party packages:
+
+- vLLM (https://github.com/vllm-project/vllm), licensed under Apache License 2.0
+- PyTorch (https://pytorch.org), licensed under BSD-3-Clause
+- Transformers (https://github.com/huggingface/transformers), licensed under Apache License 2.0
+- OpenAI Python SDK (https://github.com/openai/openai-python), licensed under Apache License 2.0
+- regex (https://github.com/mrabarnfield/mrab-regex), licensed under Apache License 2.0
+- setuptools (https://github.com/pypa/setuptools), licensed under MIT License
+- wheel (https://github.com/pypa/wheel), licensed under MIT License
+- pytest (https://github.com/pytest-dev/pytest), licensed under MIT License
+
+Third-party licenses are listed in the THIRD_PARTY_LICENSES.md file.
+For the main project license, see LICENSE.
