@@ -25,12 +25,25 @@ from vllm.entrypoints.openai.engine.protocol import (
 from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
 from vllm.logger import init_logger
 from vllm.tokenizers import TokenizerLike
-from vllm.tool_parsers.abstract_tool_parser import Tool, ToolParser
+from vllm.tool_parsers.abstract_tool_parser import ToolParser
 from vllm.tool_parsers.utils import (
-    find_tool_name,
+    Tool,
     find_tool_properties,
     partial_tag_overlap,
 )
+
+try:
+    from vllm.tool_parsers.utils import find_tool_name
+except ImportError:
+
+    def find_tool_name(tools: list[Tool] | None, tool_name: str) -> bool:
+        """Compatibility helper for vLLM versions without this utility."""
+        if not tools:
+            return False
+        return any(
+            getattr(getattr(tool, "function", tool), "name", None) == tool_name
+            for tool in tools
+        )
 
 logger = init_logger(__name__)
 

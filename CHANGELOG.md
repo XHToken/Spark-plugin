@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore weight loading on vLLM 0.23 while preserving the gate/up shard mapping
+  and the checkpoint's already-fused QKV projection.
+- Keep the `spark25` tool parser importable on vLLM releases that predate the
+  shared `find_tool_name` helper.
+
+### Changed
+
+- Run and document the complete test suite, including packed-weight regression
+  coverage for the legacy loader path.
+
 ## [0.1.0] - 2026-08-28
 
 ### Added

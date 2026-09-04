@@ -8,6 +8,7 @@ implementation changes upstream.
 """
 
 from collections.abc import Iterable
+from inspect import signature
 from itertools import islice
 
 import torch
@@ -32,6 +33,10 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
 )
+from vllm.model_executor.model_loader.weight_utils import (
+    default_weight_loader,
+    maybe_remap_kv_scale_name,
+)
 from vllm.sequence import IntermediateTensors
 
 from vllm.model_executor.models.interfaces import SupportsPP
@@ -40,10 +45,19 @@ from vllm.model_executor.models.utils import (
     PPMissingLayer,
     WeightsMapper,
     extract_layer_index,
+    is_pp_missing_parameter,
     make_empty_intermediate_tensors_factory,
     make_layers,
     maybe_prefix,
 )
+
+
+_SUPPORTS_STACKED_WEIGHTS = (
+    "orig_to_new_stacked" in signature(WeightsMapper).parameters
+)
+_SUPPORTS_SKIP_PREFIXES = "skip_prefixes" in signature(
+    AutoWeightsLoader
+).parameters
 
 
 class Spark2_5MLP(nn.Module):
@@ -326,11 +340,15 @@ class Spark2_5ForCausalLM(nn.Module, SupportsPP):
         "gate_up_proj": ["gate_proj", "up_proj"],
     }
 
-    hf_to_vllm_mapper = WeightsMapper(
-        orig_to_new_stacked={
-            ".gate_proj": (".gate_up_proj", 0),
-            ".up_proj": (".gate_up_proj", 1),
-        }
+    hf_to_vllm_mapper = (
+        WeightsMapper(
+            orig_to_new_stacked={
+                ".gate_proj": (".gate_up_proj", 0),
+                ".up_proj": (".gate_up_proj", 1),
+            }
+        )
+        if _SUPPORTS_STACKED_WEIGHTS
+        else None
     )
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
@@ -384,8 +402,79 @@ class Spark2_5ForCausalLM(nn.Module, SupportsPP):
         return logits
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        loader = AutoWeightsLoader(
-            self,
-            skip_prefixes=(["lm_head."] if self.config.tie_word_embeddings else None),
+        mapper = Spark2_5ForCausalLM.hf_to_vllm_mapper
+        if mapper is None:
+            return Spark2_5ForCausalLM._load_weights_without_stacked_mapper(
+                self, weights
+            )
+
+        loader_kwargs = {}
+        if self.config.tie_word_embeddings:
+            if _SUPPORTS_SKIP_PREFIXES:
+                loader_kwargs["skip_prefixes"] = ["lm_head."]
+            else:
+                weights = (
+                    (name, weight)
+                    for name, weight in weights
+                    if not name.startswith("lm_head.")
+                )
+        loader = AutoWeightsLoader(self, **loader_kwargs)
+        return loader.load_weights(weights, mapper=mapper)
+
+    def _load_weights_without_stacked_mapper(
+        self, weights: Iterable[tuple[str, torch.Tensor]]
+    ) -> set[str]:
+        """Load split MLP weights on vLLM releases predating stacked mappers."""
+        stacked_params_mapping = (
+            (".gate_up_proj.", ".gate_proj.", 0),
+            (".gate_up_proj.", ".up_proj.", 1),
         )
-        return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
+        params_dict = dict(self.named_parameters(remove_duplicate=False))
+        loaded_params: set[str] = set()
+
+        for name, loaded_weight in weights:
+            if self.config.tie_word_embeddings and name.startswith("lm_head."):
+                continue
+            if "rotary_emb.inv_freq" in name:
+                continue
+
+            for param_name, weight_name, shard_id in stacked_params_mapping:
+                if weight_name not in name:
+                    continue
+                name = name.replace(weight_name, param_name, 1)
+                if name.endswith(".bias") and name not in params_dict:
+                    break
+                if name.endswith("scale"):
+                    name = maybe_remap_kv_scale_name(name, params_dict)
+                    if name is None:
+                        break
+                if is_pp_missing_parameter(name, self) or name not in params_dict:
+                    break
+
+                param = params_dict[name]
+                weight_loader = getattr(
+                    param, "weight_loader", default_weight_loader
+                )
+                if weight_loader is default_weight_loader:
+                    weight_loader(param, loaded_weight)
+                else:
+                    weight_loader(param, loaded_weight, shard_id)
+                loaded_params.add(name)
+                break
+            else:
+                if name.endswith(".bias") and name not in params_dict:
+                    continue
+                name = maybe_remap_kv_scale_name(name, params_dict)
+                if name is None:
+                    continue
+                if is_pp_missing_parameter(name, self) or name not in params_dict:
+                    continue
+
+                param = params_dict[name]
+                weight_loader = getattr(
+                    param, "weight_loader", default_weight_loader
+                )
+                weight_loader(param, loaded_weight)
+                loaded_params.add(name)
+
+        return loaded_params

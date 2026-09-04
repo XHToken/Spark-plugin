@@ -194,6 +194,13 @@ concurrency of 500. Decode latency had a mean TPOT of 11.58 ms and a P99 of
 
 ## Compatibility and maintenance
 
+The compatibility path is tested against vLLM `0.23.0` and the recorded vLLM
+commit `81efe7883f30582696b69f9b9ea93c4819a8c608`. It detects the relevant loader
+capabilities instead of branching on a version string. On vLLM 0.23, the
+plugin preserves the checkpoint's split `gate_proj` / `up_proj` tensors when
+loading vLLM's packed `gate_up_proj`; it also supplies the parser-name lookup
+helper that this release lacks.
+
 The model implementation depends on vLLM's internal runtime-layer APIs. The
 `TESTED_VLLM` value in `src/vllm_spark2_5_plugin/__init__.py` records the vLLM
 revision from which the implementation was extracted. When upgrading vLLM,
@@ -204,15 +211,16 @@ registers, making version drift visible in the server log.
 
 ## Tests
 
-The plugin smoke tests do not require a GPU or model weights. After installing
-the plugin in the test environment, run:
+The plugin tests do not require a GPU or model weights. After installing the
+plugin in the test environment, run the complete suite:
 
 ```bash
-.venv/bin/python -m pytest Spark-plugin/tests/test_smoke.py -q
+.venv/bin/python -m pytest Spark-plugin/tests/ -q
 ```
 
-The tests verify both the public registration entry point and a complete
-Spark2_5 XML tool-call parse.
+The tests verify the public registration entry point, a complete Spark2_5
+XML tool-call parse, and the legacy packed-weight loading path (including
+gate/up shard IDs, the already-fused QKV projection, and tied embeddings).
 
 ## Plugin loading and allowlists
 
@@ -267,6 +275,14 @@ vLLM. Check the complete server log for the original traceback, then compare
 the running vLLM version with the vendored reference commit recorded in
 `src/vllm_spark2_5_plugin/__init__.py`.
 
+### `WeightsMapper` rejects `orig_to_new_stacked` on vLLM 0.23
+
+Use a plugin revision containing the vLLM 0.23 compatibility path and run the
+complete test suite above. Removing only the unsupported constructor argument
+is insufficient: Spark checkpoints store separate gate/up tensors that must be
+loaded into distinct shards of vLLM's packed projection. If the reported serve
+command uses `--tool-call-parser spark25`, verify that parser path as well.
+
 ## Project layout
 
 ```text
@@ -278,6 +294,7 @@ Spark-plugin/
 |   +-- spark2_5_tool_parser.py   # Spark2_5 XML/KV parser
 +-- tests/
 |   +-- test_smoke.py           # registration and parser smoke tests
+|   +-- test_weight_loading.py  # packed-weight compatibility regression
 +-- pyproject.toml
 ```
 
