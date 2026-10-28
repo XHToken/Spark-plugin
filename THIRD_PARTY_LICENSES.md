@@ -11,7 +11,7 @@ The project itself is licensed under the Apache License 2.0 (see `LICENSE`).
 
 | Package | Version / Reference | License |
 |---|---|---|
-| [vLLM](https://github.com/vllm-project/vllm) | [tag `v0.32.0`](https://github.com/vllm-project/vllm/tree/v0.32.0) (runtime baseline) | Apache-2.0 |
+| [vLLM](https://github.com/vllm-project/vllm) | == 0.32.0 ([runtime baseline](https://github.com/vllm-project/vllm/tree/v0.32.0)) | Apache-2.0 |
 | [PyTorch](https://github.com/pytorch/pytorch) | (transitive via vLLM) | BSD-3-Clause |
 | [Transformers](https://github.com/huggingface/transformers) | (transitive via vLLM) | Apache-2.0 |
 | [OpenAI Python SDK](https://github.com/openai/openai-python) | >= 2.25.0 | Apache-2.0 |
@@ -46,8 +46,8 @@ The additional DSpark files are:
 - `tests/test_spark_triton_attention.py` -- CUDA numerical checks for the draft
   attention implementation, using PyTorch and vLLM.
 
-Package metadata does not pin `vllm`; install `vllm==0.32.0` explicitly for the
-current documented baseline.
+Package metadata pins `vllm==0.32.0` and requires Python 3.11 or newer, matching
+the selected runtime. This version change adds no new third-party packages.
 
 Each of the three vendored model/config/parser files above carries these headers:
 

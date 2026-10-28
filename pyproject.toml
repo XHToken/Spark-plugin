@@ -8,10 +8,9 @@ version = "0.1.0"
 description = "Spark2_5 support for vLLM, maintained out of tree"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10"
-# The implementation targets vLLM tag v0.32.0. Keep version selection with
-# the operator; TESTED_VLLM records the runtime baseline in the package.
-dependencies = ["vllm"]
+requires-python = ">=3.11"
+# Internal vLLM APIs must match the implementation and TESTED_VLLM baseline.
+dependencies = ["vllm==0.32.0"]
 
 [project.optional-dependencies]
 test = ["pytest>=8.0"]

@@ -86,7 +86,7 @@ above does not extend to DSpark.
 
 ## Linux prerequisites
 
-Use a supported Linux Python environment with vLLM `0.32.0` installed. GPU
+Use a supported Linux Python 3.11 or newer environment with vLLM `0.32.0` installed. GPU
 deployments must have a compatible NVIDIA driver and the CUDA/PyTorch runtime
 required by that vLLM installation. The plugin itself adds no system packages
 or compiled extensions.
@@ -267,9 +267,11 @@ the serving environment before installing the plugin with `--no-deps`:
 uv pip install "vllm==0.32.0"
 ```
 
-The package metadata currently declares an unpinned `vllm` dependency, so select
-the version explicitly. When upgrading vLLM, retest model registration, tool
-parsing, and DSpark decoding against the new runtime APIs.
+The package metadata pins `vllm==0.32.0` and requires Python 3.11 or newer,
+matching that runtime's minimum Python version. CI tests Python 3.11 and 3.12
+against this pinned dependency. When upgrading vLLM, update the dependency pin
+and retest model registration, tool parsing, and DSpark decoding against the
+new runtime APIs.
 
 The `TESTED_VLLM` constant in `src/vllm_spark2_5_plugin/__init__.py` records
 `v0.32.0`, the current runtime baseline, and appears in registration logs
