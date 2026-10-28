@@ -30,36 +30,64 @@ class SparkTritonAttentionTest(unittest.TestCase):
         q_starts_cpu = [0, query_len, 2 * query_len]
         seq_lens = torch.tensor(seq_lens_cpu, device=device, dtype=torch.int32)
         q_starts = torch.tensor(q_starts_cpu, device=device, dtype=torch.int32)
-        q = torch.randn(2 * query_len, q_heads, head_size, device=device, dtype=torch.bfloat16)
+        q = torch.randn(
+            2 * query_len, q_heads, head_size, device=device, dtype=torch.bfloat16
+        )
         out = torch.empty_like(q)
 
         blocks_per_req = [math.ceil(n / block_size) for n in seq_lens_cpu]
         table = torch.zeros(2, max(blocks_per_req), device=device, dtype=torch.int32)
         cache = torch.zeros(
-            sum(blocks_per_req) + 1, kv_heads, block_size, 2 * head_size,
-            device=device, dtype=torch.bfloat16,
+            sum(blocks_per_req) + 1,
+            kv_heads,
+            block_size,
+            2 * head_size,
+            device=device,
+            dtype=torch.bfloat16,
         )
         source = []
         next_block = 1
         for req, seq_len in enumerate(seq_lens_cpu):
-            keys = torch.randn(seq_len, kv_heads, head_size, device=device, dtype=torch.bfloat16)
+            keys = torch.randn(
+                seq_len, kv_heads, head_size, device=device, dtype=torch.bfloat16
+            )
             values = torch.randn_like(keys)
             source.append((keys, values))
-            ids = torch.arange(next_block, next_block + blocks_per_req[req], device=device)
-            table[req, :blocks_per_req[req]] = ids
+            ids = torch.arange(
+                next_block, next_block + blocks_per_req[req], device=device
+            )
+            table[req, : blocks_per_req[req]] = ids
             for pos in range(seq_len):
-                cache[next_block + pos // block_size, :, pos % block_size, :head_size] = keys[pos]
-                cache[next_block + pos // block_size, :, pos % block_size, head_size:] = values[pos]
+                cache[
+                    next_block + pos // block_size, :, pos % block_size, :head_size
+                ] = keys[pos]
+                cache[
+                    next_block + pos // block_size, :, pos % block_size, head_size:
+                ] = values[pos]
             next_block += blocks_per_req[req]
 
         k_cache, v_cache = cache.transpose(1, 2).split(head_size, dim=-1)
         _fixed_history_attention[(2, query_len, q_heads)](
-            out, q, k_cache, v_cache, table, seq_lens, q_starts,
-            head_size**-0.5, table.stride(0),
-            q.stride(0), q.stride(1), out.stride(0), out.stride(1),
-            *k_cache.stride(), *v_cache.stride(),
-            q_per_kv=q_heads // kv_heads, block_size=block_size,
-            head_size=head_size, window=window, BLOCK_N=32,
+            out,
+            q,
+            k_cache,
+            v_cache,
+            table,
+            seq_lens,
+            q_starts,
+            head_size**-0.5,
+            table.stride(0),
+            q.stride(0),
+            q.stride(1),
+            out.stride(0),
+            out.stride(1),
+            *k_cache.stride(),
+            *v_cache.stride(),
+            q_per_kv=q_heads // kv_heads,
+            block_size=block_size,
+            head_size=head_size,
+            window=window,
+            BLOCK_N=32,
         )
         torch.cuda.synchronize()
 
@@ -75,8 +103,10 @@ class SparkTritonAttentionTest(unittest.TestCase):
                     probs = torch.softmax(scores, dim=0)
                     expected = probs @ values[start:, kv_head].float()
                     torch.testing.assert_close(
-                        out[req * query_len + qi, head].float(), expected,
-                        atol=0.04, rtol=0.04,
+                        out[req * query_len + qi, head].float(),
+                        expected,
+                        atol=0.04,
+                        rtol=0.04,
                     )
 
 

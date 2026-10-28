@@ -36,8 +36,9 @@ from .spark2_5 import Spark2_5DecoderLayer
 class RNNSerialHead(nn.Module):
     """GRU serial head adapted to the vLLM DSpark markov-head contract."""
 
-    def __init__(self, vocab_size: int, markov_rank: int, prefix: str,
-                 quant_config=None) -> None:
+    def __init__(
+        self, vocab_size: int, markov_rank: int, prefix: str, quant_config=None
+    ) -> None:
         super().__init__()
         self.vocab_size = int(vocab_size)
         self.markov_rank = int(markov_rank)
@@ -45,9 +46,13 @@ class RNNSerialHead(nn.Module):
         self.token_embedding = nn.Embedding(self.vocab_size, self.markov_rank)
         self.gru_cell = nn.GRUCell(self.markov_rank, self.markov_rank)
         self.output_proj = ReplicatedLinear(
-            self.markov_rank, self.vocab_size, bias=False,
-            quant_config=quant_config, prefix=maybe_prefix(prefix, "output_proj"),
-            return_bias=False, disable_tp=True,
+            self.markov_rank,
+            self.vocab_size,
+            bias=False,
+            quant_config=quant_config,
+            prefix=maybe_prefix(prefix, "output_proj"),
+            return_bias=False,
+            disable_tp=True,
         )
 
     def embed(self, token_ids: torch.Tensor) -> torch.Tensor:
@@ -58,14 +63,22 @@ class RNNSerialHead(nn.Module):
         hidden = self.gru_cell(flat, torch.zeros_like(flat))
         return self.output_proj(hidden).view(*markov_embed.shape[:-1], self.vocab_size)
 
-    def bias(self, markov_embed: torch.Tensor,
-             logits_processor: LogitsProcessor | None = None) -> torch.Tensor:
+    def bias(
+        self,
+        markov_embed: torch.Tensor,
+        logits_processor: LogitsProcessor | None = None,
+    ) -> torch.Tensor:
         del logits_processor
         return self._step(markov_embed)
 
-    def apply_bias_gathered(self, markov_embed: torch.Tensor, logits: torch.Tensor,
-                            values: torch.Tensor, index: torch.Tensor,
-                            scale: float = 1.0) -> torch.Tensor:
+    def apply_bias_gathered(
+        self,
+        markov_embed: torch.Tensor,
+        logits: torch.Tensor,
+        values: torch.Tensor,
+        index: torch.Tensor,
+        scale: float = 1.0,
+    ) -> torch.Tensor:
         flat = markov_embed.reshape(-1, self.markov_rank)
         hidden = self.gru_cell(flat, torch.zeros_like(flat))
         weight = self.output_proj.weight[index]
@@ -250,10 +263,7 @@ class Spark2_5DSparkModel(nn.Module):
         if self.fc_norm is not None:
             chunks = aux_hidden_states.chunk(self.num_aux_hidden_states, dim=-1)
             aux_hidden_states = torch.cat(
-                [
-                    norm(chunk)
-                    for norm, chunk in zip(self.fc_norm, chunks, strict=True)
-                ],
+                [norm(chunk) for norm, chunk in zip(self.fc_norm, chunks, strict=True)],
                 dim=-1,
             )
         return self.main_norm(self.main_proj(aux_hidden_states))
@@ -429,10 +439,10 @@ class Spark2_5DSparkForCausalLM(nn.Module):
             if layer_match is not None:
                 stage = int(layer_match[1])
                 if not 0 <= stage < len(self.model.layers):
-                    raise ValueError(f"DSpark weight stage exceeds num_draft_layers: {name}")
-                return (
-                    f"model.layers.{stage}.{layer_match[2]}"
-                )
+                    raise ValueError(
+                        f"DSpark weight stage exceeds num_draft_layers: {name}"
+                    )
+                return f"model.layers.{stage}.{layer_match[2]}"
             return f"model.{rest}"
         if not 0 <= stage < len(self.model.layers):
             raise ValueError(f"DSpark weight stage exceeds num_draft_layers: {name}")

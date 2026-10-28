@@ -85,13 +85,9 @@ def _patch_dspark_dispatch() -> None:
         target_model_config = getattr(self, "target_model_config", None)
         target_hf_config = getattr(target_model_config, "hf_config", None)
         original_hf_config = None
-        is_spark = (
-            target_hf_config is not None
-            and (
-                getattr(target_hf_config, "model_type", None) == "spark2_5"
-                or "Spark2_5ForCausalLM"
-                in getattr(target_hf_config, "architectures", ())
-            )
+        is_spark = target_hf_config is not None and (
+            getattr(target_hf_config, "model_type", None) == "spark2_5"
+            or "Spark2_5ForCausalLM" in getattr(target_hf_config, "architectures", ())
         )
         if is_spark:
             # DSpark without an external model aliases target_model_config, so
@@ -104,9 +100,10 @@ def _patch_dspark_dispatch() -> None:
             return
         draft = self.draft_model_config
         current_hf = getattr(draft, "hf_config", None)
-        if (
-            getattr(current_hf, "model_type", None) != "deepseek_v4"
-            or "DSparkDraftModel" not in getattr(current_hf, "architectures", ())
+        if getattr(
+            current_hf, "model_type", None
+        ) != "deepseek_v4" or "DSparkDraftModel" not in getattr(
+            current_hf, "architectures", ()
         ):
             return
 

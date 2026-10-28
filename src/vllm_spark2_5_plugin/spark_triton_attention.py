@@ -15,12 +15,32 @@ logger = init_logger(__name__)
 
 @triton.jit
 def _fixed_history_attention(
-    out_ptr, q_ptr, k_ptr, v_ptr, table_ptr, seq_lens_ptr, q_starts_ptr,
-    scale, table_stride, q_stride0, q_stride1, o_stride0, o_stride1,
-    k_stride0, k_stride1, k_stride2, k_stride3,
-    v_stride0, v_stride1, v_stride2, v_stride3,
-    q_per_kv: tl.constexpr, block_size: tl.constexpr,
-    head_size: tl.constexpr, window: tl.constexpr, BLOCK_N: tl.constexpr,
+    out_ptr,
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    table_ptr,
+    seq_lens_ptr,
+    q_starts_ptr,
+    scale,
+    table_stride,
+    q_stride0,
+    q_stride1,
+    o_stride0,
+    o_stride1,
+    k_stride0,
+    k_stride1,
+    k_stride2,
+    k_stride3,
+    v_stride0,
+    v_stride1,
+    v_stride2,
+    v_stride3,
+    q_per_kv: tl.constexpr,
+    block_size: tl.constexpr,
+    head_size: tl.constexpr,
+    window: tl.constexpr,
+    BLOCK_N: tl.constexpr,
 ):
     req = tl.program_id(0)
     q_local = tl.program_id(1)
@@ -48,18 +68,27 @@ def _fixed_history_attention(
         keep = valid & (pos >= history_start)
         block = tl.load(
             table_ptr + req * table_stride + pos // block_size,
-            mask=valid, other=0,
+            mask=valid,
+            other=0,
         ).to(tl.int64)
         slot = pos % block_size
         k = tl.load(
-            k_ptr + block[:, None] * k_stride0 + slot[:, None] * k_stride1
-            + kv_head * k_stride2 + d[None, :] * k_stride3,
-            mask=keep[:, None], other=0.0,
+            k_ptr
+            + block[:, None] * k_stride0
+            + slot[:, None] * k_stride1
+            + kv_head * k_stride2
+            + d[None, :] * k_stride3,
+            mask=keep[:, None],
+            other=0.0,
         ).to(tl.float32)
         v = tl.load(
-            v_ptr + block[:, None] * v_stride0 + slot[:, None] * v_stride1
-            + kv_head * v_stride2 + d[None, :] * v_stride3,
-            mask=keep[:, None], other=0.0,
+            v_ptr
+            + block[:, None] * v_stride0
+            + slot[:, None] * v_stride1
+            + kv_head * v_stride2
+            + d[None, :] * v_stride3,
+            mask=keep[:, None],
+            other=0.0,
         ).to(tl.float32)
         scores = tl.sum(k * q[None, :], axis=1) * scale
         scores = tl.where(keep, scores, float("-inf"))
@@ -81,7 +110,9 @@ class SparkTritonAttentionImpl(TritonAttentionImpl):
         if dspark_window < 1:
             raise ValueError("dspark_window must be positive")
         if self.head_size & (self.head_size - 1):
-            raise ValueError("Spark fixed-history Triton attention requires power-of-two head size")
+            raise ValueError(
+                "Spark fixed-history Triton attention requires power-of-two head size"
+            )
         self.dspark_window = dspark_window
         logger.info_once(
             "Using Spark fixed-history Triton draft attention (window=%d)",
@@ -89,31 +120,59 @@ class SparkTritonAttentionImpl(TritonAttentionImpl):
         )
 
     def forward(
-        self, layer, query, key, value, kv_cache, attn_metadata, output,
-        output_scale=None, output_block_scale=None,
+        self,
+        layer,
+        query,
+        key,
+        value,
+        kv_cache,
+        attn_metadata,
+        output,
+        output_scale=None,
+        output_block_scale=None,
     ):
         if attn_metadata is None:
             return output.fill_(0)
         if output_scale is not None or output_block_scale is not None:
-            raise NotImplementedError("Spark Triton path does not support output quantization")
-        if query.dtype not in (torch.float16, torch.bfloat16) or kv_cache.dtype != query.dtype:
+            raise NotImplementedError(
+                "Spark Triton path does not support output quantization"
+            )
+        if (
+            query.dtype not in (torch.float16, torch.bfloat16)
+            or kv_cache.dtype != query.dtype
+        ):
             raise NotImplementedError("Spark Triton path requires dense FP16/BF16 KV")
         if self._is_per_token_head_quant:
             raise NotImplementedError("Spark Triton path does not support quantized KV")
         cache = kv_cache.transpose(1, 2)
         k_cache, v_cache = cache.split(self.head_size, dim=-1)
         _fixed_history_attention[
-            (attn_metadata.seq_lens.shape[0], attn_metadata.max_query_len, self.num_heads)
+            (
+                attn_metadata.seq_lens.shape[0],
+                attn_metadata.max_query_len,
+                self.num_heads,
+            )
         ](
-            output, query, k_cache, v_cache,
-            attn_metadata.block_table, attn_metadata.seq_lens,
-            attn_metadata.query_start_loc, self.scale,
+            output,
+            query,
+            k_cache,
+            v_cache,
+            attn_metadata.block_table,
+            attn_metadata.seq_lens,
+            attn_metadata.query_start_loc,
+            self.scale,
             attn_metadata.block_table.stride(0),
-            query.stride(0), query.stride(1), output.stride(0), output.stride(1),
-            *k_cache.stride(), *v_cache.stride(),
+            query.stride(0),
+            query.stride(1),
+            output.stride(0),
+            output.stride(1),
+            *k_cache.stride(),
+            *v_cache.stride(),
             q_per_kv=self.num_queries_per_kv,
-            block_size=k_cache.shape[1], head_size=self.head_size,
-            window=self.dspark_window, BLOCK_N=32,
+            block_size=k_cache.shape[1],
+            head_size=self.head_size,
+            window=self.dspark_window,
+            BLOCK_N=32,
         )
         return output
 
