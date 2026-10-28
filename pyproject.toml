@@ -9,8 +9,8 @@ description = "Spark2_5 support for vLLM, maintained out of tree"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
-# The implementation is vendored from an unreleased vLLM commit. Keep version
-# selection with the operator and record the exact tested commit in the package.
+# The implementation targets vLLM tag v0.32.0. Keep version selection with
+# the operator; TESTED_VLLM records the runtime baseline in the package.
 dependencies = ["vllm"]
 
 [project.optional-dependencies]

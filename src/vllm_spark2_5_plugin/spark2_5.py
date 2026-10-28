@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Inference-only Spark model.
 
-VENDORED FROM vLLM commit 81efe7883f30582696b69f9b9ea93c4819a8c608.
-Keep this file aligned with the source commit; re-vendor it when the model
-implementation changes upstream.
+Adapted from vLLM tag v0.32.0.
+Local additions expose auxiliary hidden states and shared embeddings to the
+vLLM V2 GPU DSpark runner.
 """
 
 from collections.abc import Iterable
@@ -34,7 +34,11 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
 )
 from vllm.sequence import IntermediateTensors
 
-from vllm.model_executor.models.interfaces import SupportsPP
+from vllm.model_executor.models.interfaces import (
+    EagleModelMixin,
+    SupportsEagle3,
+    SupportsPP,
+)
 from vllm.model_executor.models.utils import (
     AutoWeightsLoader,
     PPMissingLayer,
@@ -44,6 +48,8 @@ from vllm.model_executor.models.utils import (
     make_layers,
     maybe_prefix,
 )
+
+from .spark_triton_attention import SparkTritonAttentionBackend
 
 
 class Spark2_5MLP(nn.Module):
@@ -139,15 +145,30 @@ class Spark2_5Attention(nn.Module):
             prefix=f"{prefix}.q_k_v_proj",
         )
 
+        # Spark DSpark layers are numbered after the target layers. They use
+        # the plugin Triton backend so every draft query shares one fixed
+        # context-history range; target layers keep vLLM's selected backend.
+        draft_backend = None
+        if (
+            self.layer_idx >= config.num_hidden_layers
+            and layer_type == "sliding_attention"
+        ):
+            draft_backend = SparkTritonAttentionBackend
         self.core_attention = Attention(
             self.num_heads,
             self.head_dim,
             scale=self.scaling,
             num_kv_heads=self.num_kv_heads,
-            per_layer_sliding_window=config.sliding_window if layer_type == "sliding_attention" else None,
+            per_layer_sliding_window=(
+                config.sliding_window
+                if layer_type == "sliding_attention" and draft_backend is None
+                else None
+            ),
             cache_config=cache_config,
             quant_config=quant_config,
             prefix=f"{prefix}.core_attention",
+            attn_backend=draft_backend,
+            **({"dspark_window": config.sliding_window} if draft_backend else {}),
         )
 
         self.out_proj = RowParallelLinear(
@@ -247,7 +268,7 @@ class Spark2_5DecoderLayer(nn.Module):
         "inputs_embeds": 0,
     }
 )
-class Spark2_5Model(nn.Module):
+class Spark2_5Model(nn.Module, EagleModelMixin):
     def __init__(
         self,
         *,
@@ -290,13 +311,19 @@ class Spark2_5Model(nn.Module):
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embedding(input_ids)
 
+    @property
+    def embed_tokens(self) -> nn.Module:
+        # DSpark's loader looks up this name when sharing target embeddings.
+        # Keep `embedding` as the only registered name for Spark checkpoints.
+        return self.embedding
+
     def forward(
         self,
         input_ids: torch.Tensor | None,
         positions: torch.Tensor,
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
-    ) -> torch.Tensor | IntermediateTensors:
+    ) -> torch.Tensor | IntermediateTensors | tuple[torch.Tensor, list[torch.Tensor]]:
         if get_pp_group().is_first_rank:
             if inputs_embeds is not None:
                 hidden_states = inputs_embeds
@@ -308,8 +335,19 @@ class Spark2_5Model(nn.Module):
             hidden_states = intermediate_tensors["hidden_states"]
             residual = intermediate_tensors["residual"]
 
-        for layer in islice(self.layers, self.start_layer, self.end_layer):
+        aux_hidden_states = self._maybe_add_hidden_state(
+            [], self.start_layer, hidden_states, residual
+        )
+        for idx, layer in enumerate(
+            islice(self.layers, self.start_layer, self.end_layer),
+            start=self.start_layer,
+        ):
             hidden_states, residual = layer(positions, hidden_states, residual)
+            # DSpark layer IDs are converted to output boundaries (idx + 1)
+            # by vLLM. Capture the full residual stream before final RMSNorm.
+            self._maybe_add_hidden_state(
+                aux_hidden_states, idx + 1, hidden_states, residual
+            )
 
         if not get_pp_group().is_last_rank:
             return IntermediateTensors(
@@ -317,10 +355,12 @@ class Spark2_5Model(nn.Module):
             )
 
         hidden_states, _ = self.norm(hidden_states, residual)
+        if aux_hidden_states:
+            return hidden_states, aux_hidden_states
         return hidden_states
 
 
-class Spark2_5ForCausalLM(nn.Module, SupportsPP):
+class Spark2_5ForCausalLM(nn.Module, SupportsPP, SupportsEagle3):
     packed_modules_mapping = {
         "q_k_v_proj": ["q_proj", "k_proj", "v_proj"],
         "gate_up_proj": ["gate_proj", "up_proj"],
@@ -370,7 +410,7 @@ class Spark2_5ForCausalLM(nn.Module, SupportsPP):
         positions: torch.Tensor,
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
-    ) -> torch.Tensor | IntermediateTensors:
+    ) -> torch.Tensor | IntermediateTensors | tuple[torch.Tensor, list[torch.Tensor]]:
         model_output = self.model(
             input_ids, positions, intermediate_tensors, inputs_embeds
         )
@@ -384,8 +424,13 @@ class Spark2_5ForCausalLM(nn.Module, SupportsPP):
         return logits
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        loader = AutoWeightsLoader(
-            self,
-            skip_prefixes=(["lm_head."] if self.config.tie_word_embeddings else None),
+        # Combined Spark-X25 checkpoints also contain the DSpark branch under
+        # ``draft_model.*``. The target model is loaded first and must leave
+        # those keys for the DSpark model loader.
+        target_weights = (
+            (name, weight)
+            for name, weight in weights
+            if not name.startswith("draft_model.")
         )
-        return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
+        loader = AutoWeightsLoader(self)
+        return loader.load_weights(target_weights, mapper=self.hf_to_vllm_mapper)

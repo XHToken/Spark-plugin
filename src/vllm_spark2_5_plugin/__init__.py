@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import logging
 import os
+from copy import deepcopy
 
 __all__ = [
     "ARCHITECTURE",
+    "DRAFT_ARCHITECTURE",
+    "DRAFT_MODEL_TARGET",
     "MODEL_TARGET",
     "OVERRIDE_ENV",
     "TESTED_VLLM",
@@ -23,7 +26,9 @@ logger = logging.getLogger(__name__)
 
 ARCHITECTURE = "Spark2_5ForCausalLM"
 MODEL_TARGET = f"{__name__}.spark2_5:{ARCHITECTURE}"
-TESTED_VLLM = "81efe7883f30582696b69f9b9ea93c4819a8c608"
+DRAFT_ARCHITECTURE = "Spark2_5DSparkForCausalLM"
+DRAFT_MODEL_TARGET = f"{__name__}.spark2_5_dspark:{DRAFT_ARCHITECTURE}"
+TESTED_VLLM = "v0.32.0"
 OVERRIDE_ENV = "SPARK2_5_PLUGIN_OVERRIDE"
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
@@ -57,10 +62,92 @@ def _register_tool_parser() -> None:
     )
 
 
+def _patch_dspark_dispatch() -> None:
+    """Keep Spark DSpark configs out of vLLM's DeepSeek fallback branch.
+
+    vLLM 0.32.0 rewrites every unrecognised DSpark architecture to
+    ``DSparkDraftModel`` during ``SpeculativeConfig.__post_init__``. The
+    plugin is loaded before engine configuration, so wrapping that hook lets
+    us restore Spark after the upstream validation has completed.
+    """
+    from vllm.config.speculative import SpeculativeConfig
+
+    if getattr(SpeculativeConfig, "_spark2_5_dspark_patched", False):
+        return
+
+    original_post_init = SpeculativeConfig.__post_init__
+
+    def post_init(self):
+        # For DSpark configured without an explicit ``model``, vLLM creates
+        # ``draft_model_config`` inside ``original_post_init``. Capture the
+        # target Spark config before that happens; inspecting
+        # ``self.draft_model_config`` here returns None in that path.
+        target_model_config = getattr(self, "target_model_config", None)
+        target_hf_config = getattr(target_model_config, "hf_config", None)
+        original_hf_config = None
+        is_spark = (
+            target_hf_config is not None
+            and (
+                getattr(target_hf_config, "model_type", None) == "spark2_5"
+                or "Spark2_5ForCausalLM"
+                in getattr(target_hf_config, "architectures", ())
+            )
+        )
+        if is_spark:
+            # DSpark without an external model aliases target_model_config, so
+            # this snapshot also protects the target config from in-place edits.
+            original_hf_config = deepcopy(target_hf_config)
+
+        original_post_init(self)
+
+        if original_hf_config is None or self.method != "dspark":
+            return
+        draft = self.draft_model_config
+        current_hf = getattr(draft, "hf_config", None)
+        if (
+            getattr(current_hf, "model_type", None) != "deepseek_v4"
+            or "DSparkDraftModel" not in getattr(current_hf, "architectures", ())
+        ):
+            return
+
+        # Spark checkpoints use the native names ``markov_rank`` and
+        # ``target_layer_ids``. The DSpark runner expects the normalized names.
+        if not hasattr(original_hf_config, "dspark_markov_rank"):
+            markov_rank = getattr(original_hf_config, "markov_rank", None)
+            if markov_rank is not None:
+                original_hf_config.dspark_markov_rank = markov_rank
+        if not hasattr(original_hf_config, "dspark_target_layer_ids"):
+            target_layer_ids = getattr(original_hf_config, "target_layer_ids", None)
+            if target_layer_ids is not None:
+                original_hf_config.dspark_target_layer_ids = target_layer_ids
+        original_hf_config.is_causal = False
+        original_hf_config.architectures = [DRAFT_ARCHITECTURE]
+        draft.hf_config = original_hf_config
+        # Restore the text/architecture snapshots that update_arch_ derives
+        # from hf_config and make ModelRegistry resolve the plugin class.
+        self.update_arch_()
+        logger.info(
+            "vllm-spark2_5-plugin: restored native Spark DSpark draft "
+            "architecture %s after vLLM fallback detection",
+            DRAFT_ARCHITECTURE,
+        )
+
+    SpeculativeConfig.__post_init__ = post_init
+    SpeculativeConfig._spark2_5_dspark_patched = True
+
+
 def register() -> None:
     """Register Spark2_5 with vLLM's ``vllm.general_plugins`` entry point."""
     import vllm
     from vllm import ModelRegistry
+
+    _patch_dspark_dispatch()
+
+    if (
+        DRAFT_ARCHITECTURE not in ModelRegistry.get_supported_archs()
+        or _override_requested()
+    ):
+        ModelRegistry.register_model(DRAFT_ARCHITECTURE, DRAFT_MODEL_TARGET)
 
     if (
         ARCHITECTURE in ModelRegistry.get_supported_archs()

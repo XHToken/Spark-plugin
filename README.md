@@ -8,13 +8,15 @@ It enables loading and serving Spark2_5 models without modifying the vLLM source
 tree. The plugin registers:
 
 - `Spark2_5ForCausalLM`, the Spark2_5 model implementation;
+- `Spark2_5DSparkForCausalLM`, the Spark DSpark speculative draft model;
 - the `spark2_5` Transformers configuration (`model_type: "spark2_5"`); and
 - the Spark2_5 XML/KV tool-call parser, registered under the vLLM parser name
   `spark25`.
 
-The implementation is vendored from vLLM commit
-`81efe7883f30582696b69f9b9ea93c4819a8c608` and uses vLLM's existing runtime
-layers. It does not contain custom CUDA kernels or require a separate build.
+The implementation targets vLLM tag
+[`v0.32.0`](https://github.com/vllm-project/vllm/tree/v0.32.0) and uses vLLM's
+existing runtime layers. DSpark sliding draft layers use the plugin's Triton
+JIT kernel; no separate extension build is required.
 
 ## Spark2_5 model capabilities
 
@@ -56,9 +58,35 @@ The MLP combines the gate and up projections with
 down projection. `AutoWeightsLoader` and `WeightsMapper` map Hugging Face
 checkpoint weights into this packed projection layout.
 
+### Spark DSpark integration
+
+The DSpark implementation lives in
+[`spark2_5_dspark.py`](src/vllm_spark2_5_plugin/spark2_5_dspark.py). It projects
+selected target hidden states into a non-causal draft block, shares the target
+embedding and LM head, and loads `draft_model.*`, `mtp.*`, or `model.mtp.*`
+checkpoint weights. It supports `vanilla` and `rnn` Markov heads and an optional
+confidence head.
+
+The checkpoint must supply a positive `dspark_markov_rank` and nonempty,
+unique, ascending, zero-based `dspark_target_layer_ids`. The registration hook
+in `__init__.py` restores Spark after vLLM's DeepSeek fallback and normalizes
+`markov_rank` and `target_layer_ids` to these DSpark field names. Draft and
+target hidden sizes and full vocabularies must match.
+
+[`spark_triton_attention.py`](src/vllm_spark2_5_plugin/spark_triton_attention.py)
+implements fixed-history sliding draft attention. For target context length
+`L` and draft block length `B`, every query attends to keys from
+`max(0, L - sliding_window)` through `L + B - 1`, including the full non-causal
+block. It uses vLLM's bundled Triton and requires dense FP16/BF16 KV and
+power-of-two head dimensions. Target attention keeps vLLM's selected backend.
+Draft layers default to sliding attention; `dspark_layer_types` can choose
+sliding or full attention per layer. DSpark requires pipeline-parallel and
+decode-context-parallel sizes of 1; the target-only pipeline-parallel support
+above does not extend to DSpark.
+
 ## Linux prerequisites
 
-Use a supported Linux Python environment with vLLM already installed. GPU
+Use a supported Linux Python environment with vLLM `0.32.0` installed. GPU
 deployments must have a compatible NVIDIA driver and the CUDA/PyTorch runtime
 required by that vLLM installation. The plugin itself adds no system packages
 or compiled extensions.
@@ -78,6 +106,7 @@ plugin through the `vllm.general_plugins` entry-point metadata.
 
 ```bash
 # From the vLLM checkout containing this directory.
+uv pip install "vllm==0.32.0"
 uv pip install -e ./Spark-plugin --no-deps
 ```
 
@@ -122,6 +151,42 @@ vllm serve /path/to/spark2_5-model \
 
 The parser name is `spark25`, not `spark2_5`: `spark2_5` identifies the model
 configuration, while `spark25` is the name registered in `ToolParserManager`.
+
+To enable Spark DSpark speculative decoding, use a Spark2_5 checkpoint that
+includes DSpark draft weights (`draft_model.*` or `mtp.*`) and the corresponding
+DSpark configuration:
+
+```bash
+vllm serve /path/to/spark2_5-dspark-model \
+  --trust-remote-code \
+  --enable-auto-tool-choice \
+  --tool-call-parser spark25 \
+  --chat-template /path/to/chat_template.jinja \
+  --served-model-name Spark2_5 \
+  --speculative-config '{"method":"dspark","num_speculative_tokens":7}'
+```
+
+When DSpark is enabled and the request's `temperature` is not `0.0`, we
+recommend setting `draft_sample_method` to `probabilistic` so that the draft
+sampler retains a probabilistic proposal distribution for rejection sampling.
+The draft applies temperature; target top-k/top-p and penalties can still make
+the two distributions differ. Set it in the server's
+`--speculative-config`:
+
+```text
+--speculative-config '{"method":"dspark","num_speculative_tokens":7,"draft_sample_method":"probabilistic"}'
+```
+
+The draft weights are loaded from the same checkpoint as the target model, so
+no separate draft `model` path is needed. The plugin registers
+`Spark2_5DSparkForCausalLM` and restores the Spark draft architecture if vLLM's
+DSpark configuration selects its DeepSeek fallback. The override ensures that
+the plugin's target model and tool parser are used even when vLLM already
+provides Spark2_5 support.
+
+The value `7` is an example; match `num_speculative_tokens` to the checkpoint's
+`dspark_block_size` (or `block_size`) when configured. Spark DSpark currently
+requires pipeline-parallel and decode-context-parallel sizes of 1.
 
 For a small local test deployment, consider `--enforce-eager` and lower values
 for `--max-model-len`, `--max-num-batched-tokens`, and
@@ -194,13 +259,22 @@ concurrency of 500. Decode latency had a mean TPOT of 11.58 ms and a P99 of
 
 ## Compatibility and maintenance
 
-The model implementation depends on vLLM's internal runtime-layer APIs. The
-`TESTED_VLLM` value in `src/vllm_spark2_5_plugin/__init__.py` records the vLLM
-revision from which the implementation was extracted. When upgrading vLLM,
-retest the plugin and re-vendor the model files if an internal API has moved.
+The model and DSpark implementations depend on vLLM's internal runtime APIs.
+The current dependency baseline is vLLM tag `v0.32.0`. Install that version in
+the serving environment before installing the plugin with `--no-deps`:
 
-The plugin logs both the tested revision and the running vLLM version when it
-registers, making version drift visible in the server log.
+```bash
+uv pip install "vllm==0.32.0"
+```
+
+The package metadata currently declares an unpinned `vllm` dependency, so select
+the version explicitly. When upgrading vLLM, retest model registration, tool
+parsing, and DSpark decoding against the new runtime APIs.
+
+The `TESTED_VLLM` constant in `src/vllm_spark2_5_plugin/__init__.py` records
+`v0.32.0`, the current runtime baseline, and appears in registration logs
+alongside the running vLLM version. Historical extraction provenance is retained
+in `NOTICE` and source headers.
 
 ## Tests
 
@@ -211,8 +285,18 @@ the plugin in the test environment, run:
 .venv/bin/python -m pytest Spark-plugin/tests/test_smoke.py -q
 ```
 
-The tests verify both the public registration entry point and a complete
+The smoke tests verify both the public registration entry point and a complete
 Spark2_5 XML tool-call parse.
+
+[`test_spark_triton_attention.py`](tests/test_spark_triton_attention.py) checks
+the fixed-history draft kernel against a PyTorch reference for requests with
+different context lengths. This test requires CUDA and is skipped when CUDA
+is unavailable; it is not an end-to-end DSpark decoding test.
+
+```bash
+# From the plugin repository root, in the vLLM 0.32.0 environment.
+.venv/bin/python -m pytest tests/test_spark_triton_attention.py -q
+```
 
 ## Plugin loading and allowlists
 
@@ -264,20 +348,22 @@ This is expected when the installed vLLM contains the model. Set
 
 The entry-point loader catches plugin import failures and continues starting
 vLLM. Check the complete server log for the original traceback, then compare
-the running vLLM version with the vendored reference commit recorded in
-`src/vllm_spark2_5_plugin/__init__.py`.
+the running vLLM version with the current dependency baseline, `0.32.0`.
 
 ## Project layout
 
 ```text
 Spark-plugin/
 +-- src/vllm_spark2_5_plugin/
-|   +-- __init__.py             # register() and entry-point integration
-|   +-- spark2_5.py               # vendored Spark2_5 model
-|   +-- spark2_5_config.py        # Transformers configuration
-|   +-- spark2_5_tool_parser.py   # Spark2_5 XML/KV parser
+|   +-- __init__.py              # registration and DSpark config integration
+|   +-- spark2_5.py              # Spark2_5 target model
+|   +-- spark2_5_dspark.py       # DSpark draft, heads, and weight loading
+|   +-- spark_triton_attention.py # fixed-history draft attention kernel
+|   +-- spark2_5_config.py       # Transformers configuration
+|   +-- spark2_5_tool_parser.py  # Spark2_5 XML/KV parser
 +-- tests/
 |   +-- test_smoke.py           # registration and parser smoke tests
+|   +-- test_spark_triton_attention.py # CUDA kernel numerical test
 +-- pyproject.toml
 ```
 
