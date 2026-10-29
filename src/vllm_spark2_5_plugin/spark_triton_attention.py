@@ -36,11 +36,14 @@ def _fixed_history_attention(
     v_stride1,
     v_stride2,
     v_stride3,
+    k_scale_ptr,
+    v_scale_ptr,
     q_per_kv: tl.constexpr,
     block_size: tl.constexpr,
     head_size: tl.constexpr,
     window: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    FP8_KV_CACHE: tl.constexpr,
 ):
     req = tl.program_id(0)
     q_local = tl.program_id(1)
@@ -80,7 +83,7 @@ def _fixed_history_attention(
             + d[None, :] * k_stride3,
             mask=keep[:, None],
             other=0.0,
-        ).to(tl.float32)
+        )
         v = tl.load(
             v_ptr
             + block[:, None] * v_stride0
@@ -89,7 +92,15 @@ def _fixed_history_attention(
             + d[None, :] * v_stride3,
             mask=keep[:, None],
             other=0.0,
-        ).to(tl.float32)
+        )
+        if FP8_KV_CACHE:
+            # vLLM stores FP8 KV as value / static tensor scale. Reconstruct
+            # the original K/V values before the dot products.
+            k = k.to(tl.float32) * tl.load(k_scale_ptr)
+            v = v.to(tl.float32) * tl.load(v_scale_ptr)
+        else:
+            k = k.to(tl.float32)
+            v = v.to(tl.float32)
         scores = tl.sum(k * q[None, :], axis=1) * scale
         scores = tl.where(keep, scores, float("-inf"))
         m_new = tl.maximum(m, tl.max(scores, axis=0))
@@ -107,6 +118,10 @@ def _fixed_history_attention(
 class SparkTritonAttentionImpl(TritonAttentionImpl):
     def __init__(self, *args, dspark_window: int, **kwargs):
         super().__init__(*args, **kwargs)
+        # The inherited Triton backend enables query quantization whenever
+        # FP8 KV cache is selected. This custom kernel only supports FP16/BF16
+        # queries; it dequantizes the FP8 K/V cache itself instead.
+        self.supports_quant_query_input = False
         if dspark_window < 1:
             raise ValueError("dspark_window must be positive")
         if self.head_size & (self.head_size - 1):
@@ -137,15 +152,30 @@ class SparkTritonAttentionImpl(TritonAttentionImpl):
             raise NotImplementedError(
                 "Spark Triton path does not support output quantization"
             )
-        if (
-            query.dtype not in (torch.float16, torch.bfloat16)
-            or kv_cache.dtype != query.dtype
-        ):
-            raise NotImplementedError("Spark Triton path requires dense FP16/BF16 KV")
         if self._is_per_token_head_quant:
-            raise NotImplementedError("Spark Triton path does not support quantized KV")
+            raise NotImplementedError(
+                "Spark Triton path supports per-tensor FP8 KV only; "
+                "fp8_per_token_head is not supported"
+            )
+        if query.dtype not in (torch.float16, torch.bfloat16):
+            raise NotImplementedError(
+                "Spark Triton path requires FP16/BF16 query for FP8 KV"
+            )
+        fp8_kv_cache = self.kv_cache_dtype in ("fp8", "fp8_e4m3")
+        if self.kv_cache_dtype.startswith("fp8") and not fp8_kv_cache:
+            raise NotImplementedError(
+                f"Spark Triton path supports fp8_e4m3 KV only, got "
+                f"{self.kv_cache_dtype}"
+            )
+        if not fp8_kv_cache and kv_cache.dtype != query.dtype:
+            raise NotImplementedError("Spark Triton path requires dense FP16/BF16 KV")
         cache = kv_cache.transpose(1, 2)
         k_cache, v_cache = cache.split(self.head_size, dim=-1)
+        if fp8_kv_cache:
+            # Quantized cache storage may be uint8; reinterpret its bytes as
+            # the platform FP8 dtype, matching vLLM's Triton backend.
+            k_cache = k_cache.view(self.fp8_dtype)
+            v_cache = v_cache.view(self.fp8_dtype)
         _fixed_history_attention[
             (
                 attn_metadata.seq_lens.shape[0],
@@ -168,11 +198,14 @@ class SparkTritonAttentionImpl(TritonAttentionImpl):
             output.stride(1),
             *k_cache.stride(),
             *v_cache.stride(),
+            layer._k_scale,
+            layer._v_scale,
             q_per_kv=self.num_queries_per_kv,
             block_size=k_cache.shape[1],
             head_size=self.head_size,
             window=self.dspark_window,
             BLOCK_N=32,
+            FP8_KV_CACHE=fp8_kv_cache,
         )
         return output
 

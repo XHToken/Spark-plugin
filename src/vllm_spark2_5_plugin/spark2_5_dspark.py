@@ -187,7 +187,7 @@ class Spark2_5DSparkModel(nn.Module):
             config.hidden_size,
             bias=False,
             return_bias=False,
-            quant_config=vllm_config.quant_config,
+            quant_config=None,
             prefix=maybe_prefix(prefix, "main_proj"),
         )
         self.main_norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
