@@ -2,7 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Transformers configuration for Spark2_5 checkpoints.
 
-VENDORED FROM vLLM commit 81efe7883f30582696b69f9b9ea93c4819a8c608.
+Originally vendored from vLLM commit
+81efe7883f30582696b69f9b9ea93c4819a8c608; adapted for runtime tag v0.32.0.
 """
 
 from typing import Any
@@ -50,12 +51,10 @@ class Spark2_5Config(PretrainedConfig):
                 "sliding_attention" if bool((i + 1) % 4) else "full_attention"
                 for i in range(self.num_hidden_layers)
             ]
-        self.layer_types = layer_types
-
         if rope_parameters is not None:
-            self.rope_parameters = rope_parameters
+            spark_rope_parameters = rope_parameters
         else:
-            self.rope_parameters = {
+            spark_rope_parameters = {
                 "full_attention": {
                     "rope_theta": 5000000,
                     "partial_rotary_factor": 0.25,
@@ -66,4 +65,9 @@ class Spark2_5Config(PretrainedConfig):
                 },
             }
 
-        super().__init__(**kwargs)
+        # Transformers' generic RoPE validator expects a flat parameter
+        # dictionary. Spark uses one dictionary per attention type, so defer
+        # assigning it until after the base configuration has been validated.
+        super().__init__(rope_parameters=None, **kwargs)
+        self.layer_types = layer_types
+        self.rope_parameters = spark_rope_parameters

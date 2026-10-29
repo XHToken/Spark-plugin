@@ -11,7 +11,7 @@ The project itself is licensed under the Apache License 2.0 (see `LICENSE`).
 
 | Package | Version / Reference | License |
 |---|---|---|
-| [vLLM](https://github.com/vllm-project/vllm) | commit `81efe788` (vendored) | Apache-2.0 |
+| [vLLM](https://github.com/vllm-project/vllm) | == 0.32.0 ([runtime baseline](https://github.com/vllm-project/vllm/tree/v0.32.0)) | Apache-2.0 |
 | [PyTorch](https://github.com/pytorch/pytorch) | (transitive via vLLM) | BSD-3-Clause |
 | [Transformers](https://github.com/huggingface/transformers) | (transitive via vLLM) | Apache-2.0 |
 | [OpenAI Python SDK](https://github.com/openai/openai-python) | >= 2.25.0 | Apache-2.0 |
@@ -25,15 +25,31 @@ The project itself is licensed under the Apache License 2.0 (see `LICENSE`).
 ## Vendored Code
 
 The following source files under `src/vllm_spark2_5_plugin/` were vendored
-from the [vLLM](https://github.com/vllm-project/vllm) project at commit
-[`81efe7883f30582696b69f9b9ea93c4819a8c608`](https://github.com/vllm-project/vllm/tree/81efe7883f30582696b69f9b9ea93c4819a8c608)
-and are licensed under the Apache License 2.0:
+from the [vLLM](https://github.com/vllm-project/vllm) project and are licensed
+under the Apache License 2.0. The current runtime dependency baseline is
+release tag [`v0.32.0`](https://github.com/vllm-project/vllm/tree/v0.32.0).
+Historical extraction details remain in `NOTICE` and source headers; they do
+not select the current runtime dependency:
 
 - `spark2_5.py` -- Spark2_5 model implementation
 - `spark2_5_config.py` -- Transformers configuration for Spark2_5
 - `spark2_5_tool_parser.py` -- Spark2_5 XML/KV tool-call parser
 
-Each vendored file carries the following SPDX headers:
+The additional DSpark files are:
+
+- `src/vllm_spark2_5_plugin/spark2_5_dspark.py` -- draft model and weight
+  mapping, importing vLLM DSpark heads; retains Apache-2.0/vLLM SPDX headers.
+- `src/vllm_spark2_5_plugin/spark_triton_attention.py` -- plugin fixed-history
+  draft attention, using Triton JIT through vLLM utilities. Triton is licensed
+  under MIT and supplied transitively through vLLM; no separate extension build
+  is required.
+- `tests/test_spark_triton_attention.py` -- CUDA numerical checks for the draft
+  attention implementation, using PyTorch and vLLM.
+
+Package metadata pins `vllm==0.32.0` and requires Python 3.11 or newer, matching
+the selected runtime. This version change adds no new third-party packages.
+
+Each of the three vendored model/config/parser files above carries these headers:
 
 ```
 SPDX-License-Identifier: Apache-2.0
