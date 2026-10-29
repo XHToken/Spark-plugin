@@ -14,9 +14,8 @@ tree. The plugin registers:
   `spark25`.
 
 The implementation targets vLLM tag
-[`v0.32.0`](https://github.com/vllm-project/vllm/tree/v0.32.0) and uses vLLM's
-existing runtime layers. DSpark sliding draft layers use the plugin's Triton
-JIT kernel; no separate extension build is required.
+[`v0.29.0`](https://github.com/vllm-project/vllm/tree/v0.29.0) and uses vLLM's
+existing runtime layers. No separate extension build is required.
 
 ## Spark2_5 model capabilities
 
@@ -58,6 +57,69 @@ The MLP combines the gate and up projections with
 down projection. `AutoWeightsLoader` and `WeightsMapper` map Hugging Face
 checkpoint weights into this packed projection layout.
 
+## Ascend NPU deployment
+
+Ascend NPU DSpark deployment requires the accompanying
+[vllm-ascend 0.29.0rc1 patch](patch/vllm-ascend-0.29.0rc1-spark-npu.patch).
+The NPU runtime uses vLLM tag `v0.29.0` and vllm-ascend tag `v0.29.0rc1`.
+Install both runtimes in the same Ascend environment before installing this
+plugin with `--no-deps`. The custom draft attention requires dense FP16/BF16 KV.
+
+### What the Ascend patch changes
+
+The patch modifies two files in the **vllm-ascend source tree**:
+
+- `vllm_ascend/worker/model_runner_v1.py`: use the selected integer kernel block
+  size when reshaping hybrid KV caches. This avoids treating a `MultipleOf`
+  constraint as an integer during cache allocation.
+- `vllm_ascend/spec_decode/llm_base_proposer.py`: allow an external DSpark draft
+  model with a callable `combine_hidden_states` method through the hidden-state
+  drafter assertion. The exception is restricted to `method == "dspark"`.
+
+Apply this patch for Ascend DSpark deployment on `v0.29.0rc1`. It does not modify
+vLLM itself and is not needed for GPU deployment. It contains these two runtime
+changes only; installation of CANN, torch-npu, and build dependencies is separate.
+
+### Apply the patch and install
+
+Use an activated Linux Ascend environment with CANN, torch-npu, the required
+build dependencies, and vLLM `0.29.0` already installed. Source the CANN/ATB
+environment scripts required by your installation first.
+
+The following commands start from the **Spark-plugin repository root** and
+create a sibling vllm-ascend checkout:
+
+```bash
+SPARK_PLUGIN_DIR="$(pwd)"
+git clone --branch v0.29.0rc1 --single-branch \
+  https://github.com/vllm-project/vllm-ascend.git ../vllm-ascend
+ASCEND_SOURCE_DIR="$(cd ../vllm-ascend && pwd)"
+
+# Check applicability before changing the Ascend source tree.
+git -C "$ASCEND_SOURCE_DIR" apply --check \
+  "$SPARK_PLUGIN_DIR/patch/vllm-ascend-0.29.0rc1-spark-npu.patch"
+git -C "$ASCEND_SOURCE_DIR" apply \
+  "$SPARK_PLUGIN_DIR/patch/vllm-ascend-0.29.0rc1-spark-npu.patch"
+
+# Install the patched runtime and plugin into the active environment.
+python -m pip install -e "$ASCEND_SOURCE_DIR" --no-deps --no-build-isolation
+python -m pip install -e "$SPARK_PLUGIN_DIR" --no-deps
+```
+
+For an existing `v0.29.0rc1` source checkout, set `ASCEND_SOURCE_DIR` to its
+absolute path and skip the clone. Apply the patch once; `git apply --check`
+should succeed before applying it. The patched checkout must be the one
+installed in the serving environment. `--no-deps` preserves the preinstalled
+Ascend dependencies; it does not install missing prerequisites.
+
+Verify the installed versions and plugin registration, then restart the server:
+
+```bash
+python -m pip show vllm vllm-ascend vllm-spark2_5-plugin
+SPARK2_5_PLUGIN_OVERRIDE=1 python -c \
+  "from vllm_spark2_5_plugin import register; register()"
+```
+
 ### Spark DSpark integration
 
 The DSpark implementation lives in
@@ -86,7 +148,7 @@ above does not extend to DSpark.
 
 ## Linux prerequisites
 
-Use a supported Linux Python 3.11 or newer environment with vLLM `0.32.0` installed. GPU
+Use a supported Linux Python environment with vLLM `0.29.0` installed. GPU
 deployments must have a compatible NVIDIA driver and the CUDA/PyTorch runtime
 required by that vLLM installation. The plugin itself adds no system packages
 or compiled extensions.
@@ -106,7 +168,6 @@ plugin through the `vllm.general_plugins` entry-point metadata.
 
 ```bash
 # From the vLLM checkout containing this directory.
-uv pip install "vllm==0.32.0"
 uv pip install -e ./Spark-plugin --no-deps
 ```
 
@@ -260,23 +321,20 @@ concurrency of 500. Decode latency had a mean TPOT of 11.58 ms and a P99 of
 ## Compatibility and maintenance
 
 The model and DSpark implementations depend on vLLM's internal runtime APIs.
-The current dependency baseline is vLLM tag `v0.32.0`. Install that version in
+The current dependency baseline is vLLM tag `v0.29.0`. Install that version in
 the serving environment before installing the plugin with `--no-deps`:
 
 ```bash
-uv pip install "vllm==0.32.0"
+uv pip install "vllm==0.29.0"
 ```
 
-The package metadata pins `vllm==0.32.0` and requires Python 3.11 or newer,
-matching that runtime's minimum Python version. CI tests Python 3.11 and 3.12
-against this pinned dependency. When upgrading vLLM, update the dependency pin
-and retest model registration, tool parsing, and DSpark decoding against the
-new runtime APIs.
+The package metadata pins `vllm==0.29.0`. When upgrading vLLM, retest model registration, tool
+parsing, and DSpark decoding against the new runtime APIs.
 
 The `TESTED_VLLM` constant in `src/vllm_spark2_5_plugin/__init__.py` records
-`v0.32.0`, the current runtime baseline, and appears in registration logs
-alongside the running vLLM version. Historical extraction provenance is retained
-in `NOTICE` and source headers.
+the tested runtime tag and appears in registration logs alongside the running
+vLLM version. The vendored source commit remains recorded in file headers and
+license notices for provenance.
 
 ## Tests
 
@@ -296,7 +354,7 @@ different context lengths. This test requires CUDA and is skipped when CUDA
 is unavailable; it is not an end-to-end DSpark decoding test.
 
 ```bash
-# From the plugin repository root, in the vLLM 0.32.0 environment.
+# From the plugin repository root, in the vLLM 0.29.0 environment.
 .venv/bin/python -m pytest tests/test_spark_triton_attention.py -q
 ```
 
@@ -350,7 +408,7 @@ This is expected when the installed vLLM contains the model. Set
 
 The entry-point loader catches plugin import failures and continues starting
 vLLM. Check the complete server log for the original traceback, then compare
-the running vLLM version with the current dependency baseline, `0.32.0`.
+the running vLLM version with the current dependency baseline, `0.29.0`.
 
 ## Project layout
 
@@ -366,6 +424,9 @@ Spark-plugin/
 +-- tests/
 |   +-- test_smoke.py           # registration and parser smoke tests
 |   +-- test_spark_triton_attention.py # CUDA kernel numerical test
++-- patch/
+|   +-- vllm-ascend-0.29.0rc1-spark-npu.patch # Ascend DSpark runtime fixes
++-- MANIFEST.in                 # include docs and patches in source archives
 +-- pyproject.toml
 ```
 

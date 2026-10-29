@@ -19,6 +19,7 @@ __all__ = [
     "MODEL_TARGET",
     "OVERRIDE_ENV",
     "TESTED_VLLM",
+    "TESTED_VLLM_ASCEND",
     "register",
 ]
 
@@ -28,7 +29,8 @@ ARCHITECTURE = "Spark2_5ForCausalLM"
 MODEL_TARGET = f"{__name__}.spark2_5:{ARCHITECTURE}"
 DRAFT_ARCHITECTURE = "Spark2_5DSparkForCausalLM"
 DRAFT_MODEL_TARGET = f"{__name__}.spark2_5_dspark:{DRAFT_ARCHITECTURE}"
-TESTED_VLLM = "v0.32.0"
+TESTED_VLLM = "v0.29.0"
+TESTED_VLLM_ASCEND = "v0.29.0rc1"
 OVERRIDE_ENV = "SPARK2_5_PLUGIN_OVERRIDE"
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
@@ -65,7 +67,7 @@ def _register_tool_parser() -> None:
 def _patch_dspark_dispatch() -> None:
     """Keep Spark DSpark configs out of vLLM's DeepSeek fallback branch.
 
-    vLLM 0.32.0 rewrites every unrecognised DSpark architecture to
+    vLLM 0.29.0 rewrites every unrecognised DSpark architecture to
     ``DSparkDraftModel`` during ``SpeculativeConfig.__post_init__``. The
     plugin is loaded before engine configuration, so wrapping that hook lets
     us restore Spark after the upstream validation has completed.
@@ -163,9 +165,10 @@ def register() -> None:
     ModelRegistry.register_model(ARCHITECTURE, MODEL_TARGET)
     logger.info(
         "vllm-spark2_5-plugin: registered %s -> %s "
-        "(tested against vLLM %s, running %s)",
+        "(tested against vLLM %s / vllm-ascend %s, running %s)",
         ARCHITECTURE,
         MODEL_TARGET,
         TESTED_VLLM,
+        TESTED_VLLM_ASCEND,
         vllm.__version__,
     )

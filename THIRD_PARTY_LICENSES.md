@@ -11,7 +11,7 @@ The project itself is licensed under the Apache License 2.0 (see `LICENSE`).
 
 | Package | Version / Reference | License |
 |---|---|---|
-| [vLLM](https://github.com/vllm-project/vllm) | == 0.32.0 ([runtime baseline](https://github.com/vllm-project/vllm/tree/v0.32.0)) | Apache-2.0 |
+| [vLLM](https://github.com/vllm-project/vllm) | `v0.29.0` (runtime; vendored source commit recorded below) | Apache-2.0 |
 | [PyTorch](https://github.com/pytorch/pytorch) | (transitive via vLLM) | BSD-3-Clause |
 | [Transformers](https://github.com/huggingface/transformers) | (transitive via vLLM) | Apache-2.0 |
 | [OpenAI Python SDK](https://github.com/openai/openai-python) | >= 2.25.0 | Apache-2.0 |
@@ -24,12 +24,12 @@ The project itself is licensed under the Apache License 2.0 (see `LICENSE`).
 
 ## Vendored Code
 
+The runtime baseline is vLLM `v0.29.0`; Ascend deployments use vllm-ascend `v0.29.0rc1`.
+
 The following source files under `src/vllm_spark2_5_plugin/` were vendored
-from the [vLLM](https://github.com/vllm-project/vllm) project and are licensed
-under the Apache License 2.0. The current runtime dependency baseline is
-release tag [`v0.32.0`](https://github.com/vllm-project/vllm/tree/v0.32.0).
-Historical extraction details remain in `NOTICE` and source headers; they do
-not select the current runtime dependency:
+from the [vLLM](https://github.com/vllm-project/vllm) project at commit
+[`81efe7883f30582696b69f9b9ea93c4819a8c608`](https://github.com/vllm-project/vllm/tree/81efe7883f30582696b69f9b9ea93c4819a8c608)
+and are licensed under the Apache License 2.0:
 
 - `spark2_5.py` -- Spark2_5 model implementation
 - `spark2_5_config.py` -- Transformers configuration for Spark2_5

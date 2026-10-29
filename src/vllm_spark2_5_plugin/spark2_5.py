@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Inference-only Spark model.
 
-Adapted from vLLM tag v0.32.0.
+VENDORED FROM vLLM commit 81efe7883f30582696b69f9b9ea93c4819a8c608.
 Local additions expose auxiliary hidden states and shared embeddings to the
 vLLM V2 GPU DSpark runner.
 """
@@ -192,6 +192,7 @@ class Spark2_5Attention(nn.Module):
         qkv, _ = self.q_k_v_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q, k = self.rotary_emb(positions, q, k)
+        v = v.contiguous()
         attn_output = self.core_attention(q, k, v)
 
         if self.headwise_attn_output_gate:

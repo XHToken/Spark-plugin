@@ -9,19 +9,41 @@ from typing import Any
 import regex as re
 from openai.types.responses import ToolChoiceFunction
 
-from vllm.renderers.chat_utils import make_tool_call_id
+try:
+    from vllm.renderers.chat_utils import make_tool_call_id
+except ModuleNotFoundError as error:
+    if error.name not in {"vllm.renderers", "vllm.renderers.chat_utils"}:
+        raise
+    from vllm.entrypoints.chat_utils import make_tool_call_id
+
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionRequest,
 )
-from vllm.entrypoints.generate.base.protocol import (
-    DeltaFunctionCall,
-    DeltaMessage,
-    DeltaToolCall,
-    ExtractedToolCallInformation,
-    FunctionCall,
-    ToolCall,
-)
+try:
+    from vllm.entrypoints.openai.engine.protocol import (
+        DeltaFunctionCall,
+        DeltaMessage,
+        DeltaToolCall,
+        ExtractedToolCallInformation,
+        FunctionCall,
+        ToolCall,
+    )
+except ModuleNotFoundError as error:
+    # vLLM 0.29.0 keeps these protocol dataclasses under the generate package.
+    if error.name not in {
+        "vllm.entrypoints.openai.engine",
+        "vllm.entrypoints.openai.engine.protocol",
+    }:
+        raise
+    from vllm.entrypoints.generate.base.protocol import (
+        DeltaFunctionCall,
+        DeltaMessage,
+        DeltaToolCall,
+        ExtractedToolCallInformation,
+        FunctionCall,
+        ToolCall,
+    )
 from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
 from vllm.logger import init_logger
 from vllm.tokenizers import TokenizerLike

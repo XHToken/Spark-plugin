@@ -1,0 +1,35 @@
+--- a/vllm_ascend/worker/model_runner_v1.py
++++ b/vllm_ascend/worker/model_runner_v1.py
+@@ -5523,7 +5523,17 @@
+                     assert num_blocks >= kv_cache_config.num_blocks
+ 
+                     if hasattr(attn_backend, "get_supported_kernel_block_sizes") and self.use_hybrid_blocks:
+-                        block_size = attn_backend.get_supported_kernel_block_sizes()[0]
++                        group_id = getattr(group, "kv_cache_group_id", None)
++                        if (
++                            group_id is not None
++                            and group_id < len(self.kernel_block_sizes)
++                        ):
++                            block_size = self.kernel_block_sizes[group_id][0]
++                        else:
++                            block_size = select_common_block_size(
++                                current_kv_cache_spec.block_size,
++                                [attn_backend],
++                            )
+ 
+                         block_size_chunk = current_kv_cache_spec.block_size // block_size
+                         kv_cache_shape = attn_backend.get_kv_cache_shape(
+--- a/vllm_ascend/spec_decode/llm_base_proposer.py
++++ b/vllm_ascend/spec_decode/llm_base_proposer.py
+@@ -1007,7 +1007,10 @@
+             model = self.model
+             if isinstance(model, BreakableACLGraphWrapper):
+                 model = model.unwrap()
+-            assert isinstance(model, _HIDDEN_STATE_DRAFTER_TYPES)
++            assert isinstance(model, _HIDDEN_STATE_DRAFTER_TYPES) or (
++                self.method == "dspark"
++                and callable(getattr(model, "combine_hidden_states", None))
++            )
+             target_hidden_states = cast(_HiddenStateDrafter, model).combine_hidden_states(target_hidden_states)
+             assert target_hidden_states.shape[-1] == self.hidden_size
+ 

@@ -2,8 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Transformers configuration for Spark2_5 checkpoints.
 
-Originally vendored from vLLM commit
-81efe7883f30582696b69f9b9ea93c4819a8c608; adapted for runtime tag v0.32.0.
+VENDORED FROM vLLM commit 81efe7883f30582696b69f9b9ea93c4819a8c608.
 """
 
 from typing import Any

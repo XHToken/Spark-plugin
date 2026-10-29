@@ -1,0 +1,2 @@
+include CHANGELOG.md NPU_ADAPTATION.md THIRD_PARTY_LICENSES.md
+recursive-include patch *.patch

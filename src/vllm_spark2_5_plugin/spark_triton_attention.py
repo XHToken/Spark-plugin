@@ -1,9 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
 """Fixed-history paged attention for Spark DSpark draft layers."""
 
 from __future__ import annotations
 
 import torch
 from vllm.logger import init_logger
+from vllm.platforms import current_platform
 from vllm.triton_utils import tl, triton
 from vllm.v1.attention.backends.triton_attn import (
     TritonAttentionBackend,
@@ -36,14 +38,11 @@ def _fixed_history_attention(
     v_stride1,
     v_stride2,
     v_stride3,
-    k_scale_ptr,
-    v_scale_ptr,
     q_per_kv: tl.constexpr,
     block_size: tl.constexpr,
     head_size: tl.constexpr,
     window: tl.constexpr,
     BLOCK_N: tl.constexpr,
-    FP8_KV_CACHE: tl.constexpr,
 ):
     req = tl.program_id(0)
     q_local = tl.program_id(1)
@@ -68,7 +67,9 @@ def _fixed_history_attention(
     for start in range(first_tile, seq_len, BLOCK_N):
         pos = start + tl.arange(0, BLOCK_N)
         valid = pos < seq_len
-        keep = valid & (pos >= history_start)
+        # ``tl.where`` wants a boolean predicate; comparing again yields an
+        # explicit int1 instead of the int32 chain that Triton deprecates.
+        keep = (valid & (pos >= history_start)) != 0
         block = tl.load(
             table_ptr + req * table_stride + pos // block_size,
             mask=valid,
@@ -83,7 +84,7 @@ def _fixed_history_attention(
             + d[None, :] * k_stride3,
             mask=keep[:, None],
             other=0.0,
-        )
+        ).to(tl.float32)
         v = tl.load(
             v_ptr
             + block[:, None] * v_stride0
@@ -92,15 +93,7 @@ def _fixed_history_attention(
             + d[None, :] * v_stride3,
             mask=keep[:, None],
             other=0.0,
-        )
-        if FP8_KV_CACHE:
-            # vLLM stores FP8 KV as value / static tensor scale. Reconstruct
-            # the original K/V values before the dot products.
-            k = k.to(tl.float32) * tl.load(k_scale_ptr)
-            v = v.to(tl.float32) * tl.load(v_scale_ptr)
-        else:
-            k = k.to(tl.float32)
-            v = v.to(tl.float32)
+        ).to(tl.float32)
         scores = tl.sum(k * q[None, :], axis=1) * scale
         scores = tl.where(keep, scores, float("-inf"))
         m_new = tl.maximum(m, tl.max(scores, axis=0))
@@ -118,10 +111,6 @@ def _fixed_history_attention(
 class SparkTritonAttentionImpl(TritonAttentionImpl):
     def __init__(self, *args, dspark_window: int, **kwargs):
         super().__init__(*args, **kwargs)
-        # The inherited Triton backend enables query quantization whenever
-        # FP8 KV cache is selected. This custom kernel only supports FP16/BF16
-        # queries; it dequantizes the FP8 K/V cache itself instead.
-        self.supports_quant_query_input = False
         if dspark_window < 1:
             raise ValueError("dspark_window must be positive")
         if self.head_size & (self.head_size - 1):
@@ -133,6 +122,31 @@ class SparkTritonAttentionImpl(TritonAttentionImpl):
             "Using Spark fixed-history Triton draft attention (window=%d)",
             dspark_window,
         )
+
+    def do_kv_cache_update(self, layer, key, value, kv_cache, slot_mapping):
+        """Write the draft K/V into an Ascend ``(k_cache, v_cache)`` pair.
+
+        vLLM's Triton implementation only understands its own packed layout, so
+        on NPU the update must go through the Ascend cache-update operator.
+        """
+        if isinstance(kv_cache, (tuple, list)) or (
+            current_platform.device_type == "npu"
+            and isinstance(kv_cache, torch.Tensor)
+            and kv_cache.dim() == 5
+            and kv_cache.shape[0] == 2
+        ):
+            from vllm_ascend.device.device_op import DeviceOperator
+
+            DeviceOperator.reshape_and_cache(
+                key=key,
+                value=value,
+                key_cache=kv_cache[0],
+                value_cache=kv_cache[1],
+                slot_mapping=slot_mapping,
+                use_bnsd=False,
+            )
+            return
+        return super().do_kv_cache_update(layer, key, value, kv_cache, slot_mapping)
 
     def forward(
         self,
@@ -152,30 +166,50 @@ class SparkTritonAttentionImpl(TritonAttentionImpl):
             raise NotImplementedError(
                 "Spark Triton path does not support output quantization"
             )
-        if self._is_per_token_head_quant:
-            raise NotImplementedError(
-                "Spark Triton path supports per-tensor FP8 KV only; "
-                "fp8_per_token_head is not supported"
+        # The DSpark draft queries must land in the KV cache *before* the
+        # non-causal attention below reads "fixed history + full query block".
+        # On Ascend the forward context carries no slot_mapping dict, so vLLM's
+        # pre-backend ``unified_kv_cache_update`` is silently a no-op there;
+        # the backend therefore claims the update itself
+        # (``forward_includes_kv_cache_update``). Only real tokens are written,
+        # graph padding is skipped.
+        if key is not None and value is not None:
+            num_actual_tokens = attn_metadata.num_actual_tokens
+            self.do_kv_cache_update(
+                layer,
+                key[:num_actual_tokens],
+                value[:num_actual_tokens],
+                kv_cache,
+                attn_metadata.slot_mapping[:num_actual_tokens],
             )
-        if query.dtype not in (torch.float16, torch.bfloat16):
-            raise NotImplementedError(
-                "Spark Triton path requires FP16/BF16 query for FP8 KV"
-            )
-        fp8_kv_cache = self.kv_cache_dtype in ("fp8", "fp8_e4m3")
-        if self.kv_cache_dtype.startswith("fp8") and not fp8_kv_cache:
-            raise NotImplementedError(
-                f"Spark Triton path supports fp8_e4m3 KV only, got "
-                f"{self.kv_cache_dtype}"
-            )
-        if not fp8_kv_cache and kv_cache.dtype != query.dtype:
+        # GPU (vLLM): ``kv_cache`` is a single packed tensor with logical shape
+        #   (num_blocks, num_kv_heads, block_size, 2 * head_size).
+        # NPU (vllm-ascend): the runner reshapes the cache itself and hands over
+        #   a ``(k_cache, v_cache)`` pair, each
+        #   (num_blocks, block_size, num_kv_heads, head_size),
+        # because it queries ``get_kv_cache_shape`` on the backend class.
+        if isinstance(kv_cache, (tuple, list)):
+            k_cache, v_cache = kv_cache[0], kv_cache[1]
+        elif (
+            current_platform.device_type == "npu"
+            and isinstance(kv_cache, torch.Tensor)
+            and kv_cache.dim() == 5
+            and kv_cache.shape[0] == 2
+        ):
+            # Some vllm-ascend versions may hand over the whole
+            # (2, blocks, block, kv_heads, head) tensor instead of a pair.
+            k_cache, v_cache = kv_cache[0], kv_cache[1]
+        else:
+            cache = kv_cache.transpose(1, 2)
+            k_cache, v_cache = cache.split(self.head_size, dim=-1)
+        if (
+            query.dtype not in (torch.float16, torch.bfloat16)
+            or k_cache.dtype != query.dtype
+            or v_cache.dtype != query.dtype
+        ):
             raise NotImplementedError("Spark Triton path requires dense FP16/BF16 KV")
-        cache = kv_cache.transpose(1, 2)
-        k_cache, v_cache = cache.split(self.head_size, dim=-1)
-        if fp8_kv_cache:
-            # Quantized cache storage may be uint8; reinterpret its bytes as
-            # the platform FP8 dtype, matching vLLM's Triton backend.
-            k_cache = k_cache.view(self.fp8_dtype)
-            v_cache = v_cache.view(self.fp8_dtype)
+        if self._is_per_token_head_quant:
+            raise NotImplementedError("Spark Triton path does not support quantized KV")
         _fixed_history_attention[
             (
                 attn_metadata.seq_lens.shape[0],
@@ -198,19 +232,22 @@ class SparkTritonAttentionImpl(TritonAttentionImpl):
             output.stride(1),
             *k_cache.stride(),
             *v_cache.stride(),
-            layer._k_scale,
-            layer._v_scale,
             q_per_kv=self.num_queries_per_kv,
             block_size=k_cache.shape[1],
             head_size=self.head_size,
             window=self.dspark_window,
             BLOCK_N=32,
-            FP8_KV_CACHE=fp8_kv_cache,
         )
         return output
 
 
 class SparkTritonAttentionBackend(TritonAttentionBackend):
+    # The plugin owns the draft K/V write. vLLM's Triton backend inherits
+    # ``False`` here and relies on the pre-backend ``unified_kv_cache_update``,
+    # which needs ``forward_context.slot_mapping`` -- a mapping vllm-ascend does
+    # not populate, so the update would be skipped without any error.
+    forward_includes_kv_cache_update = True
+
     @staticmethod
     def get_name() -> str:
         return "TRITON_ATTN"
@@ -218,3 +255,24 @@ class SparkTritonAttentionBackend(TritonAttentionBackend):
     @staticmethod
     def get_impl_cls():
         return SparkTritonAttentionImpl
+
+    @staticmethod
+    def get_kv_cache_shape(
+        num_blocks: int,
+        block_size: int,
+        num_kv_heads: int,
+        head_size: int,
+        cache_dtype_str: str = "",
+    ) -> tuple[int, ...]:
+        """KV cache shape used to reshape this layer's cache.
+
+        vLLM's GPU model runner derives the layout from the ``AttentionSpec``
+        and never calls this; vllm-ascend's NPU model runner *does* call it and
+        expects the Ascend-style K/V separated 5-D shape.  The Spark kernel
+        consumes ``(num_blocks, block_size, num_kv_heads, head_size)`` K and V
+        tensors, which is exactly ``shape[1:]`` of the Ascend layout, so NBSD is
+        requested explicitly (regardless of ``VLLM_KV_CACHE_LAYOUT``).
+        """
+        if current_platform.device_type == "npu":
+            return (2, num_blocks, block_size, num_kv_heads, head_size)
+        return (num_blocks, num_kv_heads, block_size, 2 * head_size)

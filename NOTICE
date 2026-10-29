@@ -3,11 +3,11 @@ Copyright 2026 XHToken Authors
 
 This product includes software vendored from the vLLM project
 (https://github.com/vllm-project/vllm), licensed under the Apache License 2.0.
-The original extraction was based on vLLM commit
-81efe7883f30582696b69f9b9ea93c4819a8c608. The current runtime baseline is
-vLLM tag v0.32.0, pinned in package metadata and requiring Python 3.11 or newer.
-Vendored files retain their original SPDX copyright headers
-("Copyright contributors to the vLLM project").
+The vendored files were taken from vLLM commit
+81efe7883f30582696b69f9b9ea93c4819a8c608 and retain their original
+SPDX copyright headers ("Copyright contributors to the vLLM project").
+
+The runtime baseline is vLLM v0.29.0 with vllm-ascend v0.29.0rc1 for Ascend deployments.
 
 This product depends on the following third-party packages:
 
