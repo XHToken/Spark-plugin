@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
 # Internal vLLM APIs must match the implementation and TESTED_VLLM baseline.
-dependencies = ["vllm==0.32.0"]
+dependencies = ["vllm==0.33.0"]
 
 [project.optional-dependencies]
 test = ["pytest>=8.0"]
